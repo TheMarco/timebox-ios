@@ -2,7 +2,7 @@ name: TimeboxiOS
 options:
   bundleIdPrefix: com.themarco
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "17.0"
 packages:
   TimeboxStudio:
     path: ../TimeBox
@@ -16,13 +16,21 @@ targets:
         product: TimeboxKit
       - package: TimeboxStudio
         product: TimeboxBluetooth
+    info:
+      path: TimeboxiOS-Info.plist
+      properties:
+        CFBundleDisplayName: Pixel Labs
+        UILaunchScreen: {}
+        UIBackgroundModes: [bluetooth-central]
+        NSBluetoothAlwaysUsageDescription: "Connects to your Timebox over Bluetooth to send images and colors."
+        NSMicrophoneUsageDescription: "Listens to nearby music so Shazam can identify it and show the album art on your Timebox."
+        NSAppleMusicUsageDescription: "Reads what's playing in your Music app to show the album art on your Timebox."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.themarco.timebox-ios
+        DEVELOPMENT_TEAM: "3ML6V62AF5"
+        CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
-        GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
-        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Connects to your Timebox over Bluetooth to send images and colors."
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES

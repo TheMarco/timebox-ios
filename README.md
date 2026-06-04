@@ -1,9 +1,15 @@
-# Timebox iOS
+# Pixel Labs
 
-A minimal iOS app that controls a Divoom **Timebox Evo** (16×16 LED display) over BLE —
-brightness, solid color, and arbitrary 16×16 images — built entirely on the shared
+An iOS app that controls a **Divoom Timebox Evo** (16×16 LED display) over BLE — a Now
+Playing module (album art + analog/digital clocks with a scrolling title) plus brightness,
+solid color, and arbitrary 16×16 images — built entirely on the shared
 [`TimeboxClient`](../TimeBox) library (`TimeboxKit` + `TimeboxBluetooth`). No app-specific
 Bluetooth code: the BLE/RCSP transport lives in the library.
+
+> **Unofficial.** Pixel Labs is not affiliated with, authorized, or endorsed by Divoom.
+> "Divoom" and "Timebox" are trademarks of their respective owners; they're used here only
+> to describe the compatible hardware. The protocol was clean-room reimplemented for
+> interoperability — no Divoom code or assets are included.
 
 ## Build
 

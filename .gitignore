@@ -6,3 +6,4 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .DS_Store
+TimeboxiOS-Info.plist
