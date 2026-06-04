@@ -20,11 +20,14 @@ final class NowPlayingEngine: ObservableObject {
         var id: String { rawValue }
     }
 
-    @Published var showAlbumArt = true
-    @Published var clock: ClockChoice = .digital
-    @Published var dwellSeconds: Double = 8
+    @Published var showAlbumArt = true { didSet { persistSettings() } }
+    @Published var clock: ClockChoice = .digital { didSet { persistSettings() } }
+    @Published var dwellSeconds: Double = 12 { didSet { persistSettings() } }
     @Published var artSource: ArtSource = .appleMusic {
-        didSet { if running, oldValue != artSource { restartSource() } }
+        didSet {
+            persistSettings()
+            if running, oldValue != artSource { restartSource() }
+        }
     }
     @Published var status = "Idle"
     @Published var nowPlaying = "—"
@@ -36,54 +39,29 @@ final class NowPlayingEngine: ObservableObject {
     private let shazam = ShazamRecognizer()
     private let music = MusicNowPlayingSource()
     private var artFrame: PixelFrame?
+    private var artVersion = 0   // bumps on each new cover, so the loop re-sends it
+    private var restartCycle = false  // new song: jump back to the cover before scrolling
+    private var songKey = ""          // current track identity, to ignore repeat notifications
+    private var isLoading = false     // suppresses persistence while restoring saved settings
     private var loop: Task<Void, Never>?
-    private var inForeground = true
-    private var observers: [NSObjectProtocol] = []
 
     // The Timebox can't sustain fast full-frame streaming over BLE — push too hard and
     // its connection backs up and dies. ~5fps is sustainable indefinitely.
     private let tick = 0.2     // seconds per loop tick (~5fps)
-    private let scrollStep = 1 // pixels the ticker advances per tick (1 = smoothest)
+    private let scrollStep = 2 // pixels the ticker advances per tick (higher = faster scroll)
 
     init(connection: TimeboxConnection) {
         self.connection = connection
-        let nc = NotificationCenter.default
-        observers.append(nc.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-                                        object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.didEnterBackground() }
-        })
-        observers.append(nc.addObserver(forName: UIApplication.willEnterForegroundNotification,
-                                        object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.inForeground = true }
-        })
-    }
-
-    deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
-
-    // MARK: - Background
-
-    /// On backgrounding, the animation loop idles (iOS suspends us anyway). Park the panel
-    /// on a static album cover so it isn't stuck on a half-scrolled frame.
-    private func didEnterBackground() {
-        inForeground = false
-        guard running else { return }
-        pushInBackground(parkFrame())
-    }
-
-    /// Send one frame using a background task so it completes even after we're backgrounded
-    /// (Bluetooth background mode keeps the connection alive). Used for cover refresh.
-    private func pushInBackground(_ frame: PixelFrame) {
-        let id = UIApplication.shared.beginBackgroundTask(withName: "timebox-frame")
-        Task { @MainActor in
-            var lf: PixelFrame?
-            await sendSafely(frame, last: &lf)
-            UIApplication.shared.endBackgroundTask(id)
-        }
+        loadSettings()
     }
 
     func start() {
         guard !running else { return }
         running = true
+        // Keep the screen awake while the live display runs so the phone doesn't auto-sleep
+        // and suspend us. (No background-audio keepalive — it crashes when another app, e.g.
+        // Camera, seizes the audio session.)
+        UIApplication.shared.isIdleTimerDisabled = true
         wireSources()
         startSource()
         loop = Task { await runLoop() }
@@ -91,9 +69,36 @@ final class NowPlayingEngine: ObservableObject {
 
     func stop() {
         running = false
+        UIApplication.shared.isIdleTimerDisabled = false
         loop?.cancel(); loop = nil
         music.stop()
         shazam.stop()
+    }
+
+    // MARK: - Settings persistence (restored on next launch)
+
+    private enum Keys {
+        static let artSource = "np.artSource", clock = "np.clock"
+        static let showAlbumArt = "np.showAlbumArt", dwell = "np.dwell"
+    }
+
+    private func loadSettings() {
+        let d = UserDefaults.standard
+        isLoading = true
+        if let raw = d.string(forKey: Keys.artSource), let v = ArtSource(rawValue: raw) { artSource = v }
+        if let raw = d.string(forKey: Keys.clock), let v = ClockChoice(rawValue: raw) { clock = v }
+        if d.object(forKey: Keys.showAlbumArt) != nil { showAlbumArt = d.bool(forKey: Keys.showAlbumArt) }
+        if d.object(forKey: Keys.dwell) != nil { dwellSeconds = d.double(forKey: Keys.dwell) }
+        isLoading = false
+    }
+
+    private func persistSettings() {
+        guard !isLoading else { return }
+        let d = UserDefaults.standard
+        d.set(artSource.rawValue, forKey: Keys.artSource)
+        d.set(clock.rawValue, forKey: Keys.clock)
+        d.set(showAlbumArt, forKey: Keys.showAlbumArt)
+        d.set(dwellSeconds, forKey: Keys.dwell)
     }
 
     // MARK: - Art sources
@@ -109,6 +114,7 @@ final class NowPlayingEngine: ObservableObject {
         music.stop(); shazam.stop()
         artFrame = nil
         nowPlaying = "—"
+        songKey = ""
         startSource()
     }
 
@@ -120,6 +126,9 @@ final class NowPlayingEngine: ObservableObject {
         music.onStatus = { [weak self] text in self?.status = text }
         music.onSong = { [weak self] song in
             guard let self else { return }
+            let key = [song.artist, song.title].compactMap { $0 }.joined(separator: "|")
+            guard key != self.songKey else { return }   // repeat notification for the same song
+            self.songKey = key
             self.setSong(title: song.title, artist: song.artist)
             if let cg = song.artwork, let frame = ArtworkLoader.frame(from: cg) {
                 self.setArt(frame)
@@ -134,6 +143,9 @@ final class NowPlayingEngine: ObservableObject {
         shazam.onStatus = { [weak self] text in self?.status = text }
         shazam.onSong = { [weak self] song in
             guard let self else { return }
+            let key = [song.artist, song.title].compactMap { $0 }.joined(separator: "|")
+            guard key != self.songKey else { return }   // same song still playing
+            self.songKey = key
             self.setSong(title: song.title, artist: song.artist)
             guard let url = song.artworkURL else { return }
             Task { [weak self] in
@@ -142,20 +154,11 @@ final class NowPlayingEngine: ObservableObject {
         }
     }
 
-    /// Store the latest cover; if backgrounded, refresh the parked frame on the panel.
+    /// Store the latest cover; the render loop re-sends it on the next tick (artVersion bump).
     private func setArt(_ frame: PixelFrame) {
         artFrame = frame
-        if !inForeground { pushInBackground(frame) }
-    }
-
-    /// What to show when backgrounded: the cover if we have it, else a static clock that
-    /// matches the chosen style (don't jarringly switch to the analog clock).
-    private func parkFrame() -> PixelFrame {
-        if let artFrame { return artFrame }
-        switch clock {
-        case .analog: return ClockRenderer.frame(for: Date())
-        default: return DigitalClockRenderer.frame(for: Date(), ticker: tickerText(), scroll: 0)
-        }
+        artVersion += 1
+        restartCycle = true     // new cover → show it first, then scroll the title
     }
 
     // MARK: - Render loop
@@ -189,13 +192,9 @@ final class NowPlayingEngine: ObservableObject {
         var elapsed = 0.0
         var scroll = 0
         var lastSecond = -1
+        var lastArtVersion = artVersion
 
         while running && !Task.isCancelled {
-            if !inForeground {                       // backgrounded: cover is parked, don't animate
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                next = clock.now
-                continue
-            }
             if !connection.isConnected {             // dropped: wait for the auto-reconnect
                 status = "Reconnecting…"
                 lastFrame = nil
@@ -209,6 +208,10 @@ final class NowPlayingEngine: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 next = clock.now
                 continue
+            }
+            if restartCycle {
+                restartCycle = false
+                index = 0; elapsed = 0; scroll = 0   // new song: cover first, then scroll
             }
             if index >= items.count { index = 0; elapsed = 0; scroll = 0 }
             let target = items[index]
@@ -226,8 +229,10 @@ final class NowPlayingEngine: ObservableObject {
                     await sendSafely(frame, last: &lastFrame)
                 }
                 lastSecond = Calendar.current.component(.second, from: Date())
+                lastArtVersion = artVersion
             } else {
-                // Digital scrolls every tick; analog refreshes per second; art is static.
+                // Digital scrolls every tick; analog refreshes per second; art is sent only
+                // when a new cover arrives (keeps BLE near-silent so it coexists with audio).
                 var send = false
                 switch target {
                 case .digital:
@@ -236,7 +241,7 @@ final class NowPlayingEngine: ObservableObject {
                     let sec = Calendar.current.component(.second, from: Date())
                     if sec != lastSecond { send = true; lastSecond = sec }
                 case .albumArt:
-                    send = false
+                    if artVersion != lastArtVersion { send = true; lastArtVersion = artVersion }
                 }
                 if send { await sendSafely(frame, last: &lastFrame) }
             }

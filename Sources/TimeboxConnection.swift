@@ -34,7 +34,10 @@ final class TimeboxConnection: ObservableObject {
                 try await client.connect()
                 isConnected = client.isConnected
                 status = isConnected ? "Connected" : "Connected (no RX characteristic)"
-                if isConnected { try? await client.setBrightness(100) }
+                if isConnected {
+                    UserDefaults.standard.set(true, forKey: Self.autoConnectKey)   // resume next launch
+                    try? await client.setBrightness(100)
+                }
             } catch {
                 isConnected = false
                 status = "Connect failed: \(error.localizedDescription)"
@@ -44,10 +47,20 @@ final class TimeboxConnection: ObservableObject {
     }
 
     func disconnect() {
+        UserDefaults.standard.set(false, forKey: Self.autoConnectKey)   // explicit — stay disconnected
         client.disconnect()
         isConnected = false
         status = "Disconnected"
     }
+
+    /// On launch, reconnect automatically if we were connected last time (and the user didn't
+    /// explicitly disconnect). The transport finds the paired Timebox by name on its own.
+    func autoConnect() {
+        guard !isConnected, !busy, UserDefaults.standard.bool(forKey: Self.autoConnectKey) else { return }
+        connect()
+    }
+
+    private static let autoConnectKey = "conn.autoConnect"
 
     // Module-facing API (mirrors TimeboxClient).
     func send(_ frame: PixelFrame) async throws { try await client.send(image: frame) }

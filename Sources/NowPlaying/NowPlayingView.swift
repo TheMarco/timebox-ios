@@ -1,7 +1,14 @@
 import SwiftUI
+import UIKit
 
 struct NowPlayingView: View {
     @StateObject private var engine: NowPlayingEngine
+    @Environment(\.scenePhase) private var scenePhase
+
+    // "Dim screen" keeps the app awake and the Timebox running, but drops the phone screen
+    // to black + minimum backlight to save battery (true black = pixels off on OLED).
+    @State private var dimmed = false
+    @State private var savedBrightness = UIScreen.main.brightness
 
     init(connection: TimeboxConnection) {
         _engine = StateObject(wrappedValue: NowPlayingEngine(connection: connection))
@@ -40,12 +47,47 @@ struct NowPlayingView: View {
                 }
             }
             Section {
+                Button { dim() } label: {
+                    Label("Dim screen (keep running, save battery)", systemImage: "moon.fill")
+                }
+                Text("Blacks out the phone screen while the Timebox keeps going. Tap the screen to wake. Leaving this screen restores brightness.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
                 Text("Apple Music shows art for whatever's playing in the Music app (needs Media & Apple Music permission). Shazam IDs ambient music via the mic but needs the ShazamKit App ID capability (paid account). The clocks work regardless.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Now Playing")
         .onAppear { engine.start() }
-        .onDisappear { engine.stop() }
+        // Only stop when truly leaving the module — not when the dim cover is presented on top
+        // (the engine must keep driving the Timebox while the phone screen is black).
+        .onDisappear { if !dimmed { engine.stop() } }
+        .onChange(of: scenePhase) { _, phase in
+            // Keep it dark only while we're the active app; never leave the device's
+            // brightness stuck low if the user switches away.
+            if dimmed { UIScreen.main.brightness = (phase == .active) ? 0 : savedBrightness }
+        }
+        .fullScreenCover(isPresented: $dimmed, onDismiss: restoreBrightness) {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                Text("Tap to wake")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.18))
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { dimmed = false }
+            .statusBarHidden()
+        }
+    }
+
+    private func dim() {
+        savedBrightness = UIScreen.main.brightness
+        UIScreen.main.brightness = 0
+        dimmed = true
+    }
+
+    private func restoreBrightness() {
+        UIScreen.main.brightness = savedBrightness
     }
 }
