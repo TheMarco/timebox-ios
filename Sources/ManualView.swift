@@ -3,6 +3,7 @@ import TimeboxKit
 
 /// Manual test module — brightness, solid colors, and two test images. Useful for
 /// verifying the connection and the image path independent of the Now Playing loop.
+/// Patterns are generated at the connected device's resolution (16×16 or 64×64).
 struct ManualView: View {
     @EnvironmentObject private var connection: TimeboxConnection
     @State private var status = ""
@@ -19,8 +20,14 @@ struct ManualView: View {
                 Button("Blue") { run("blue") { try await connection.setColor(PixelRGB(red: 0, green: 0, blue: 255)) } }
             }
             Section("Images") {
-                Button("Test pattern (4 quadrants)") { run("quadrants") { try await connection.send(Self.quadrantFrame()) } }
-                Button("Test image (gradient)") { run("gradient") { try await connection.send(Self.gradientFrame()) } }
+                Button("Test pattern (4 quadrants)") {
+                    let size = connection.profile.width
+                    run("quadrants") { try await connection.send(Self.quadrantSurface(size: size)) }
+                }
+                Button("Test image (gradient)") {
+                    let size = connection.profile.width
+                    run("gradient") { try await connection.send(Self.gradientSurface(size: size)) }
+                }
             }
             if !status.isEmpty {
                 Section("Status") { Text(status).font(.caption) }
@@ -36,29 +43,33 @@ struct ManualView: View {
         }
     }
 
-    private static func quadrantFrame() -> PixelFrame {
-        var pixels = [PixelRGB]()
-        for y in 0..<16 {
-            for x in 0..<16 {
-                let left = x < 8, top = y < 8
+    private static func quadrantSurface(size: Int) -> Surface {
+        var surface = Surface(width: size, height: size)
+        let half = size / 2
+        for y in 0..<size {
+            for x in 0..<size {
+                let left = x < half, top = y < half
                 let c: PixelRGB
                 if top && left { c = PixelRGB(red: 255, green: 0, blue: 0) }
                 else if top && !left { c = PixelRGB(red: 0, green: 255, blue: 0) }
                 else if !top && left { c = PixelRGB(red: 0, green: 0, blue: 255) }
                 else { c = PixelRGB(red: 255, green: 255, blue: 255) }
-                pixels.append(c)
+                surface.set(x, y, c)
             }
         }
-        return (try? PixelFrame(pixels: pixels)) ?? PixelFrame()
+        return surface
     }
 
-    private static func gradientFrame() -> PixelFrame {
-        var pixels = [PixelRGB]()
-        for y in 0..<16 {
-            for x in 0..<16 {
-                pixels.append(PixelRGB(red: UInt8(x * 17), green: UInt8(y * 17), blue: 128))
+    private static func gradientSurface(size: Int) -> Surface {
+        var surface = Surface(width: size, height: size)
+        let maxv = max(1, size - 1)
+        for y in 0..<size {
+            for x in 0..<size {
+                surface.set(x, y, PixelRGB(red: UInt8(x * 255 / maxv),
+                                           green: UInt8(y * 255 / maxv),
+                                           blue: 128))
             }
         }
-        return (try? PixelFrame(pixels: pixels)) ?? PixelFrame()
+        return surface
     }
 }

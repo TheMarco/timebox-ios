@@ -2,29 +2,30 @@ import Foundation
 import UIKit
 import TimeboxKit
 
-/// Rasterizes album artwork to an enhanced 16x16 PixelFrame.
+/// Rasterizes album artwork to an enhanced `Surface` at the active device's resolution
+/// (16×16 for the Timebox, 64×64 for the Pixoo).
 enum ArtworkLoader {
     /// From a remote URL (Shazam artworkURL).
-    static func frame(from url: URL) async -> PixelFrame? {
+    static func surface(from url: URL, size: Int) async -> Surface? {
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               let cgImage = UIImage(data: data)?.cgImage
         else { return nil }
-        return frame(from: cgImage)
+        return surface(from: cgImage, size: size)
     }
 
     /// From a CGImage already in hand (Apple Music nowPlayingItem artwork).
-    static func frame(from cgImage: CGImage) -> PixelFrame? {
-        guard let frame = try? ImageToPixelFrameConverter.pixelFrame(from: cgImage, interpolation: .high)
+    static func surface(from cgImage: CGImage, size: Int) -> Surface? {
+        guard let surface = ImageToSurface.surface(from: cgImage, size: size, interpolation: .high)
         else { return nil }
-        return ImageEnhance.punchUp(frame)
+        return ImageEnhance.punchUp(surface)
     }
 
     /// Look the cover up by title + artist via the public iTunes Search API and rasterize
     /// it. This is the fallback when a track has no embedded artwork (common for Apple
     /// Music streaming). No entitlement needed — just a web request.
-    static func frame(title: String?, artist: String?) async -> PixelFrame? {
+    static func surface(title: String?, artist: String?, size: Int) async -> Surface? {
         guard let url = await searchArtworkURL(title: title, artist: artist) else { return nil }
-        return await frame(from: url)
+        return await surface(from: url, size: size)
     }
 
     private static func searchArtworkURL(title: String?, artist: String?) async -> URL? {

@@ -5,7 +5,7 @@ enum HubModule: String, Hashable {
     case nowPlaying, manual
 }
 
-/// Home screen: shared Timebox connection + a list of modules. On launch it auto-reconnects
+/// Home screen: shared display connection + a list of modules. On launch it auto-reconnects
 /// (if it was connected last time) and reopens whichever module was last in use, so the app
 /// resumes right where it left off. New modules slot in as more `NavigationLink`s here.
 struct ModuleHubView: View {
@@ -13,21 +13,28 @@ struct ModuleHubView: View {
     @AppStorage("lastModule") private var lastModule: String = ""
     @State private var path: [HubModule] = []
     @State private var didResume = false
+    @State private var showPixooIPPrompt = false
+    @State private var pixooIP = ""
 
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                Section("Timebox") {
+                Section("Display") {
                     Text(connection.status).font(.callout)
-                    HStack {
-                        Button(connection.isConnected ? "Reconnect" : "Scan & Connect") { connection.connect() }
+                    if connection.isConnected {
+                        Button("Disconnect") { connection.disconnect() }
+                            .foregroundStyle(.red)
+                    } else {
+                        Button("Connect Timebox (Bluetooth)") { connection.connectTimebox() }
                             .buttonStyle(.borderedProminent)
                             .disabled(connection.busy)
-                        Spacer()
-                        if connection.isConnected {
-                            Button("Disconnect") { connection.disconnect() }
-                                .foregroundStyle(.red)
+                        Button("Find Pixoo 64 on Wi-Fi") { connection.connectPixooAuto() }
+                            .disabled(connection.busy)
+                        Button("Enter Pixoo 64 IP…") {
+                            pixooIP = connection.lastPixooHost
+                            showPixooIPPrompt = true
                         }
+                        .disabled(connection.busy)
                     }
                 }
 
@@ -45,13 +52,13 @@ struct ModuleHubView: View {
 
                 if !connection.isConnected {
                     Section {
-                        Text("Connect to your Divoom Timebox Evo to open a module.")
+                        Text("Connect to a Divoom Timebox Evo (Bluetooth) or a Pixoo 64 (Wi-Fi) to open a module.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
                 Section {
-                    Text("Unofficial app — not affiliated with, authorized, or endorsed by Divoom. \u{201C}Divoom\u{201D} and \u{201C}Timebox\u{201D} are trademarks of their respective owners.")
+                    Text("Unofficial app — not affiliated with, authorized, or endorsed by Divoom. \u{201C}Divoom\u{201D}, \u{201C}Timebox\u{201D} and \u{201C}Pixoo\u{201D} are trademarks of their respective owners.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -61,6 +68,16 @@ struct ModuleHubView: View {
                 case .nowPlaying: NowPlayingView(connection: connection)
                 case .manual: ManualView()
                 }
+            }
+            .alert("Connect to Pixoo 64", isPresented: $showPixooIPPrompt) {
+                TextField("192.168.1.42", text: $pixooIP)
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Connect") { connection.connectPixoo(host: pixooIP) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter your Pixoo's IP address. You'll find it in the Divoom app under the device's settings.")
             }
         }
         .task { connection.autoConnect() }

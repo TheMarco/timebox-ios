@@ -3,8 +3,13 @@ import UIKit
 import TimeboxKit
 
 /// The "Now Playing" module: shows album art (Apple Music or Shazam) and/or one clock
-/// (analog or digital), crossfading between them. The digital clock pins the time to
-/// the top and scrolls the "Artist — Title" ticker below it.
+/// (analog or digital), crossfading between them. The digital clock pins the time to the
+/// top and scrolls the "Artist — Title" ticker below it.
+///
+/// Drives whichever display is connected via the shared `TimeboxConnection`: a 16×16
+/// Timebox streamed frame-by-frame over BLE, or a 64×64 Pixoo 64 driven by its own engine
+/// (static frames + native scrolling text + brightness fades) over Wi-Fi. Per-device
+/// timing/geometry comes from the connection's `DisplayProfile`, so one module serves both.
 @MainActor
 final class NowPlayingEngine: ObservableObject {
     enum ArtSource: String, CaseIterable, Identifiable {
@@ -38,17 +43,17 @@ final class NowPlayingEngine: ObservableObject {
     private let connection: TimeboxConnection
     private let shazam = ShazamRecognizer()
     private let music = MusicNowPlayingSource()
-    private var artFrame: PixelFrame?
+    private var artSurface: Surface?
+    private var accentColor: PixelRGB?   // vivid color from the current cover; tints the 64×64 clocks + title
     private var artVersion = 0   // bumps on each new cover, so the loop re-sends it
     private var restartCycle = false  // new song: jump back to the cover before scrolling
     private var songKey = ""          // current track identity, to ignore repeat notifications
     private var isLoading = false     // suppresses persistence while restoring saved settings
     private var loop: Task<Void, Never>?
 
-    // The Timebox can't sustain fast full-frame streaming over BLE — push too hard and
-    // its connection backs up and dies. ~5fps is sustainable indefinitely.
-    private let tick = 0.2     // seconds per loop tick (~5fps)
-    private let scrollStep = 2 // pixels the ticker advances per tick (higher = faster scroll)
+    /// The active panel's geometry/timing (16×16 Timebox or 64×64 Pixoo).
+    private var profile: DisplayProfile { connection.profile }
+    private var renderSize: Int { profile.width }
 
     init(connection: TimeboxConnection) {
         self.connection = connection
@@ -64,7 +69,9 @@ final class NowPlayingEngine: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = true
         wireSources()
         startSource()
-        loop = Task { await runLoop() }
+        // The Pixoo is driven by its own engine (static frames + native scrolling text +
+        // brightness fades); the Timebox streams every frame over BLE.
+        loop = Task { profile.drivesNatively ? await runNativeLoop() : await runLoop() }
     }
 
     func stop() {
@@ -112,7 +119,8 @@ final class NowPlayingEngine: ObservableObject {
 
     private func restartSource() {
         music.stop(); shazam.stop()
-        artFrame = nil
+        artSurface = nil
+        accentColor = nil
         nowPlaying = "—"
         songKey = ""
         startSource()
@@ -130,13 +138,14 @@ final class NowPlayingEngine: ObservableObject {
             guard key != self.songKey else { return }   // repeat notification for the same song
             self.songKey = key
             self.setSong(title: song.title, artist: song.artist)
-            if let cg = song.artwork, let frame = ArtworkLoader.frame(from: cg) {
-                self.setArt(frame)
+            let size = self.renderSize
+            if let cg = song.artwork, let art = ArtworkLoader.surface(from: cg, size: size) {
+                self.setArt(art)
             } else {
                 // No embedded artwork (Apple Music streaming) — look it up by title+artist.
                 let title = song.title, artist = song.artist
                 Task { [weak self] in
-                    if let frame = await ArtworkLoader.frame(title: title, artist: artist) { self?.setArt(frame) }
+                    if let art = await ArtworkLoader.surface(title: title, artist: artist, size: size) { self?.setArt(art) }
                 }
             }
         }
@@ -147,25 +156,27 @@ final class NowPlayingEngine: ObservableObject {
             guard key != self.songKey else { return }   // same song still playing
             self.songKey = key
             self.setSong(title: song.title, artist: song.artist)
+            let size = self.renderSize
             guard let url = song.artworkURL else { return }
             Task { [weak self] in
-                if let frame = await ArtworkLoader.frame(from: url) { self?.setArt(frame) }
+                if let art = await ArtworkLoader.surface(from: url, size: size) { self?.setArt(art) }
             }
         }
     }
 
     /// Store the latest cover; the render loop re-sends it on the next tick (artVersion bump).
-    private func setArt(_ frame: PixelFrame) {
-        artFrame = frame
+    private func setArt(_ surface: Surface) {
+        artSurface = surface
+        accentColor = Palette.accent(from: surface)   // derive a tint for the clocks + title
         artVersion += 1
         restartCycle = true     // new cover → show it first, then scroll the title
     }
 
-    // MARK: - Render loop
+    // MARK: - Render targets
 
     private func targets() -> [Target] {
         var list: [Target] = []
-        if showAlbumArt, artFrame != nil { list.append(.albumArt) }
+        if showAlbumArt, artSurface != nil { list.append(.albumArt) }
         switch clock {
         case .analog: list.append(.analog)
         case .digital: list.append(.digital)
@@ -176,18 +187,27 @@ final class NowPlayingEngine: ObservableObject {
 
     private func tickerText() -> String { nowPlaying == "—" ? "" : nowPlaying }
 
-    private func render(_ target: Target, scroll: Int) -> PixelFrame {
+    private func render(_ target: Target, scroll: Int) -> Surface {
         switch target {
-        case .albumArt: return artFrame ?? ClockRenderer.frame(for: Date())
-        case .analog: return ClockRenderer.frame(for: Date())
-        case .digital: return DigitalClockRenderer.frame(for: Date(), ticker: tickerText(), scroll: scroll)
+        case .albumArt: return artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize)
+        case .analog: return ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor)
+        case .digital: return DigitalClockRenderer.surface(
+            for: Date(), ticker: tickerText(), scroll: scroll,
+            size: renderSize, tickerScale: profile.tickerScale, accent: accentColor)
         }
     }
+
+    /// How far the ticker must scroll before it's fully off the left edge (device pixels).
+    private func tickerSpan(_ text: String) -> Int {
+        PixelFont.columns(for: text).count * profile.tickerScale + profile.width
+    }
+
+    // MARK: - Streaming render loop (Timebox / BLE)
 
     private func runLoop() async {
         let clock = ContinuousClock()
         var next = clock.now
-        var lastFrame: PixelFrame?
+        var lastFrame: Surface?
         var index = 0
         var elapsed = 0.0
         var scroll = 0
@@ -204,7 +224,7 @@ final class NowPlayingEngine: ObservableObject {
             }
             let items = targets()
             guard !items.isEmpty else {
-                await sendSafely(ClockRenderer.frame(for: Date()), last: &lastFrame)
+                await sendSafely(ClockRenderer.surface(for: Date(), size: renderSize), last: &lastFrame)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 next = clock.now
                 continue
@@ -219,11 +239,13 @@ final class NowPlayingEngine: ObservableObject {
             let frame = render(target, scroll: scroll)
 
             if entering {
-                if let from = lastFrame {
-                    for f in Blend.crossfade(from: from, to: frame, steps: 6) {
+                if let from = lastFrame, from.width == frame.width, from.height == frame.height {
+                    for f in Blend.crossfade(from: from, to: frame, steps: profile.crossfadeSteps) {
                         if !running { break }
                         await sendSafely(f, last: &lastFrame)
-                        try? await Task.sleep(nanoseconds: 40_000_000)
+                        if profile.crossfadeStepDelay > 0 {
+                            try? await Task.sleep(nanoseconds: profile.crossfadeStepDelay)
+                        }
                     }
                 } else {
                     await sendSafely(frame, last: &lastFrame)
@@ -248,12 +270,12 @@ final class NowPlayingEngine: ObservableObject {
 
             // Steady, deadline-based pacing: absorb variable send time so frame
             // intervals stay even (less stutter than a fixed sleep after each send).
-            next = next.advanced(by: .seconds(tick))
+            next = next.advanced(by: .seconds(profile.tick))
             if next < clock.now { next = clock.now }
             try? await clock.sleep(until: next, tolerance: .zero)
-            elapsed += tick
+            elapsed += profile.tick
             // Digital scrolls the title in from the right and off the left.
-            if target == .digital { scroll += scrollStep }
+            if target == .digital { scroll += profile.scrollStep }
 
             // The digital clock's dwell is dynamic: it ends once the full title has
             // scrolled away. The cover (and analog) use the dwell slider.
@@ -261,8 +283,7 @@ final class NowPlayingEngine: ObservableObject {
             switch target {
             case .digital:
                 let text = tickerText()
-                // Pass complete once it has fully entered from the right (+16) and exited left.
-                done = !text.isEmpty && scroll >= PixelFont.columns(for: text).count + 16
+                done = !text.isEmpty && scroll >= tickerSpan(text)
             case .albumArt, .analog:
                 done = elapsed >= max(2.0, dwellSeconds)
             }
@@ -277,7 +298,7 @@ final class NowPlayingEngine: ObservableObject {
         }
     }
 
-    private func sendSafely(_ frame: PixelFrame, last lastFrame: inout PixelFrame?) async {
+    private func sendSafely(_ frame: Surface, last lastFrame: inout Surface?) async {
         do {
             try await connection.send(frame)
             lastFrame = frame
@@ -285,6 +306,104 @@ final class NowPlayingEngine: ObservableObject {
             // Transient drop — the transport auto-reconnects and the loop pauses (via the
             // isConnected check) until it's back. Keep the module running.
             lastFrame = nil
+        }
+    }
+
+    // MARK: - Native render loop (Pixoo)
+
+    private static let pixooTickerColor = PixelRGB(red: 120, green: 170, blue: 255)
+
+    /// Scrolling now-playing title for the Pixoo's native text engine, or nil when idle.
+    private func pixooTitle() -> PixooBackend.ScrollingText? {
+        let text = tickerText()
+        guard !text.isEmpty else { return nil }
+        return PixooBackend.ScrollingText(string: text, color: accentColor ?? Self.pixooTickerColor,
+                                          y: profile.height - 16)
+    }
+
+    private func clockMinute() -> Int { Calendar.current.component(.minute, from: Date()) }
+
+    /// Present a target on the Pixoo. Entering a view fades through black; live refreshes
+    /// (`fade: false`) just re-send the frame so a ticking clock / new cover updates cleanly.
+    private func presentPixoo(_ target: Target, on pixoo: PixooBackend, fade: Bool) async {
+        switch target {
+        case .albumArt:
+            let frame = artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize)
+            try? await pixoo.present(frame, fade: fade)
+        case .analog:
+            try? await pixoo.present(ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor), fade: fade)
+        case .digital:
+            // Time-only background; the scrolling title is drawn by the device's text engine.
+            let bg = DigitalClockRenderer.surface(for: Date(), ticker: "", scroll: 0,
+                                                  size: renderSize, tickerScale: profile.tickerScale,
+                                                  accent: accentColor)
+            try? await pixoo.present(bg, fade: fade, text: pixooTitle())
+        }
+    }
+
+    /// The Pixoo can't stream frames smoothly, so instead of a per-tick loop it presents a
+    /// static view (fading in through black), dwells while refreshing only live content, then
+    /// fades to the next view. Scrolling text animates on the device the whole time.
+    private func runNativeLoop() async {
+        guard let pixoo = connection.backend as? PixooBackend else { return }
+
+        while running && !Task.isCancelled {
+            if !connection.isConnected {
+                status = "Reconnecting…"
+                await connection.attemptReconnect()
+                if !connection.isConnected { try? await Task.sleep(nanoseconds: 2_000_000_000) }
+                continue
+            }
+
+            let items = targets()
+            if items.isEmpty {                       // nothing selected: just show the clock
+                try? await pixoo.present(ClockRenderer.surface(for: Date(), size: renderSize), fade: false)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+            if restartCycle { restartCycle = false }
+
+            var index = 0
+            // Re-evaluate the (possibly changed) target list each cycle.
+            while running && !Task.isCancelled && connection.isConnected {
+                let live = targets()
+                if live.isEmpty || restartCycle { break }
+                index %= live.count
+                let target = live[index]
+                let multi = live.count > 1
+
+                await presentPixoo(target, on: pixoo, fade: true)   // enter with a fade
+                var lastArtVersion = artVersion
+                var lastMinute = clockMinute()
+
+                // Dwell, refreshing only live content (no fade) until it's time to advance.
+                let dwell = target == .digital ? max(6.0, dwellSeconds) : max(2.0, dwellSeconds)
+                let clock = ContinuousClock()
+                let deadline = clock.now.advanced(by: .seconds(dwell))
+                while running && !Task.isCancelled && connection.isConnected && !restartCycle {
+                    switch target {
+                    case .analog:
+                        try? await pixoo.present(ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor), fade: false)
+                    case .digital:
+                        if clockMinute() != lastMinute {
+                            lastMinute = clockMinute()
+                            let bg = DigitalClockRenderer.surface(for: Date(), ticker: "", scroll: 0,
+                                                                  size: renderSize, tickerScale: profile.tickerScale,
+                                                                  accent: accentColor)
+                            try? await pixoo.present(bg, fade: false, text: pixooTitle())
+                        }
+                    case .albumArt:
+                        if artVersion != lastArtVersion {
+                            lastArtVersion = artVersion
+                            if let art = artSurface { try? await pixoo.present(art, fade: false) }
+                        }
+                    }
+                    if multi && clock.now >= deadline { break }
+                    try? await Task.sleep(nanoseconds: target == .analog ? 1_000_000_000 : 300_000_000)
+                }
+
+                if multi { index += 1 } else if restartCycle { break }
+            }
         }
     }
 }
