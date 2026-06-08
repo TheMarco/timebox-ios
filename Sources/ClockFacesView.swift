@@ -94,14 +94,40 @@ private func faceLCD(_ d: Date) -> Surface {
     }
     return s
 }
-private func faceFlip(_ d: Date) -> Surface {
-    var s = bg(PixelRGB(8,8,10)); let (h0,m,_)=hms(d); let h=h12(h0)
-    func card(_ ox:Int,_ a:Int,_ b:Int){
-        for y in 12...51 { for x in ox...(ox+25) { let edge=(x==ox||x==ox+25||y==12||y==51); s.set(x,y, edge ? PixelRGB(40,40,48):PixelRGB(24,24,30)) } }
-        for x in ox...(ox+25) { s.set(x,31,PixelRGB(6,6,8)); s.set(x,32,PixelRGB(48,48,58)) }
-        let cream=PixelRGB(240,236,220); seg7(&s,ox+3,18,9,26,2,a,cream); seg7(&s,ox+14,18,9,26,2,b,cream)
+// One split-flap card showing a 2-digit value, flipping old→new over `phase` (0 = just
+// changed, 1 = settled): the old top folds up into the seam revealing the new top, then the
+// new bottom unfolds down from the seam over the old bottom.
+private func flipCard(_ s: inout Surface, _ ox: Int, _ oldVal: Int, _ newVal: Int, _ phase: Double) {
+    let face=PixelRGB(24,24,30), edge=PixelRGB(40,40,48), cream=PixelRGB(240,236,220)
+    for y in 12...51 { for x in ox...(ox+25) { s.set(x,y, (x==ox||x==ox+25||y==12||y==51) ? edge : face) } }
+    func layer(_ v: Int) -> Surface { var L=Surface(width:64,height:64,fill:face); seg7(&L,ox+3,18,9,26,2,v/10,cream); seg7(&L,ox+14,18,9,26,2,v%10,cream); return L }
+    let c0=ox+2, c1=ox+23, rTop=18, rm=31, rBot=44
+    func blit(_ src: Surface, _ sR0: Int, _ sR1: Int, _ dR0: Int, _ dR1: Int) {
+        let dh=dR1-dR0; if dh<=0 { return }
+        for dy in 0..<dh { let y=dR0+dy; let sy=sR0+Int((Double(dy)+0.5)/Double(dh)*Double(sR1-sR0)); for x in c0...c1 { s.set(x,y,src.at(x,sy)) } }
     }
-    card(4,h/10,h%10); card(35,m/10,m%10); return s
+    if phase >= 1 { let n=layer(newVal); blit(n,rTop,rBot,rTop,rBot) }
+    else {
+        let oL=layer(oldVal), nL=layer(newVal)
+        if phase < 0.5 { let a=phase*2
+            blit(nL,rTop,rm,rTop,rm)
+            blit(oL,rTop,rm, rm-Int(Double(rm-rTop)*(1-a)), rm)
+            blit(oL,rm,rBot,rm,rBot)
+        } else { let a=(phase-0.5)*2
+            blit(nL,rTop,rm,rTop,rm)
+            blit(oL,rm,rBot,rm,rBot)
+            blit(nL,rm,rBot, rm, rm+Int(Double(rBot-rm)*a))
+        }
+    }
+    for x in ox...(ox+25) { s.set(x,31,PixelRGB(6,6,8)); s.set(x,32,PixelRGB(48,48,58)) }
+}
+private func faceFlip(_ d: Date) -> Surface {
+    var s = bg(PixelRGB(8,8,10)); let (h0,m,sec)=hms(d); let h=h12(h0)
+    let sub = d.timeIntervalSince1970.truncatingRemainder(dividingBy: 1)
+    let flipDur = 0.5, elapsed = Double(sec)+sub
+    flipCard(&s, 4, (m==0) ? h12((h0+23)%24) : h, h, (m==0) ? min(1,elapsed/flipDur) : 1)
+    flipCard(&s, 35, (m+59)%60, m, min(1, elapsed/flipDur))
+    return s
 }
 private func faceBinary(_ d: Date) -> Surface {
     var s = bg(PixelRGB(2,4,3)); let (h0,m,sec)=hms(d)
@@ -325,7 +351,7 @@ final class ClockDriver: ObservableObject {
                 } else {
                     await self.connection.attemptReconnect()
                 }
-                try? await Task.sleep(nanoseconds: 250_000_000)   // ~3–4 fps; enough for the animated faces
+                try? await Task.sleep(nanoseconds: 90_000_000)   // run near the HTTP cap so animated faces (flip, matrix, pong) get frames
             }
         }
     }
