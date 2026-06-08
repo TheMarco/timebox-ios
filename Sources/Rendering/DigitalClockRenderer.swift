@@ -188,7 +188,7 @@ enum DigitalClockRenderer {
         let glyphs = isPM ? [p, m] : [a, m]
         let gap = 1
         let w = glyphs.reduce(0) { $0 + $1[0].count } + gap * (glyphs.count - 1)
-        let x0 = s.width - w - 2, y0 = 2
+        let x0 = s.width - w - 2, y0 = 3
         let ink = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), accent, 0.15)
         var x = x0
         for g in glyphs {
