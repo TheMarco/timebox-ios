@@ -88,6 +88,7 @@ let LET: [Character:[String]] = [
  "O":[".##.","#..#","#..#","#..#",".##."],"P":["###.","#..#","###.","#...","#..."],"Q":["####","#..#","#..#","####","..##"],
  "R":["###.","#..#","###.","#.#.","#..#"],"S":[".###","#...",".##.","...#","###."],"T":["#####","..#..","..#..","..#..","..#.."],
  "U":["#..#","#..#","#..#","#..#",".##."],"V":["#...#","#...#",".#.#.",".#.#.","..#.."],"W":["#...#","#...#","#.#.#","#.#.#",".#.#."],
+ "M":["#...#","##.##","#.#.#","#...#","#...#"],
  "X":["#..#","#..#",".##.","#..#","#..#"],"Y":["#..#","#..#",".##.","..#.","..#."],"'":["#","#",".",".","."]]
 func letW(_ ch: Character) -> Int { (LET[ch]?.first?.count ?? 4) }
 func text5(_ s: inout Surface, _ str: String, _ cx: Int, _ y: Int, _ c: PixelRGB) {
@@ -273,16 +274,34 @@ func faceColor(_ d: Date) -> Surface {
     return s
 }
 
-// 12. Color clock — circular HSV disc: hue=hour, saturation=minute, brightness=second (12h).
+// 12. Color clock — the real "1991 Color Clock": 4 wedges whose colors advance one per hour
+// (pieceOrder [3,0,1,2]); the active wedge sweeps its next color with the minutes; a white dot
+// orbits the ring with the seconds; AM/PM in the carved center. (mask.png overlay omitted.)
 func faceColorClock(_ d: Date) -> Surface {
-    let (h,m,sec) = hms(d)
-    let hue = (Double(h%12) + Double(m)/60) / 12
-    let sat = (Double(m) + Double(sec)/60) / 60
-    let val = Double(sec) / 60
-    let col = hsv(hue, sat, val)
+    let (h0,m,sec) = hms(d)
     var s = Surface(width:64,height:64, fill: PixelRGB(0,0,0))
-    let cx=31.5, cy=31.5, r=31.0
-    for y in 0..<64 { for x in 0..<64 { let dx=Double(x)-cx, dy=Double(y)-cy; if dx*dx+dy*dy<=r*r { s.set(x,y,col) } } }
+    let cx=31.5, cy=31.5, radius=26.0, hole=radius*0.24, ringMid=radius+3.0, ringHalf=1.5
+    let colors=[PixelRGB(255,59,48),PixelRGB(255,149,0),PixelRGB(255,204,0)]  // red, orange, yellow (12h)
+    let pieceOrder=[3,0,1,2]; let H=h0%12
+    var seg=[0,0,0,0]; for t in 0..<H { let p=pieceOrder[t%4]; seg[p]=(seg[p]+1)%colors.count }
+    let curPiece=pieceOrder[H%4], progress=Double(m)/60.0, wedge=Double.pi/3, twoPi=Double.pi*2
+    for y in 0..<64 { for x in 0..<64 {
+        let dx=Double(x)+0.5-cx, dy=Double(y)+0.5-cy, dist=(dx*dx+dy*dy).squareRoot()
+        if dist<=hole { continue }
+        if abs(dist-ringMid)<=ringHalf { s.set(x,y,PixelRGB(85,85,85)); continue }
+        if dist>radius { continue }
+        let ang=atan2(dy,dx)
+        for i in 0..<4 {
+            let startA=Double(i)*Double.pi/2 - wedge/2
+            var rel=(ang-startA).truncatingRemainder(dividingBy:twoPi); if rel<0 { rel+=twoPi }
+            if rel<=wedge { let base=colors[seg[i]%colors.count]
+                s.set(x,y, (i==curPiece && rel<=wedge*progress) ? colors[(seg[i]+1)%colors.count] : base); break }
+        }
+    }}
+    let secAng=twoPi*Double(sec)/60 - Double.pi/2, orbit=ringMid
+    let sxp=Int((cx+orbit*cos(secAng)).rounded()), syp=Int((cy+orbit*sin(secAng)).rounded())
+    for yy in -1...1 { for xx in -1...1 { if xx*xx+yy*yy<=2 { s.set(sxp+xx,syp+yy,PixelRGB(255,255,255)) } } }
+    text5(&s, h0<12 ? "AM":"PM", 32, 29, PixelRGB(235,235,235))
     return s
 }
 
@@ -310,3 +329,6 @@ let t = date(10,9,36)
 let tiles=[faceLCD(t),faceAnalog(t),faceFlip(t),faceBinary(t),faceWord(t),faceRainbow(t),facePong(t),faceNeon(t),faceMatrix(t),faceArcs(t),faceColor(t),faceColorClock(t)]
 contactSheet(tiles, cols: 4, scale: 6, gap: 8, to: out)
 print("wrote \(tiles.count) faces to \(out)  (order: LCD Analog Flip Binary Word Rainbow Pong Neon Matrix Arcs Hex Color)")
+let cct=[date(0,5,10),date(2,40,30),date(5,55,0),date(8,12,45),date(11,30,20),date(15,48,50),date(19,25,5),date(23,59,55)]
+contactSheet(cct.map{faceColorClock($0)}, cols: 4, scale: 7, gap: 8, to: "/tmp/colorclock.png")
+print("wrote color-clock strip to /tmp/colorclock.png (00:05 02:40 05:55 08:12 11:30 15:48 19:25 23:59)")
