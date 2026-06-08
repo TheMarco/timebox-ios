@@ -123,30 +123,38 @@ enum DigitalClockRenderer {
             synthwave(into: &s, accent: acc, titleBand: titleBand)
         }
 
-        drawLCDTime(into: &s, date: date, accent: acc, topY: 6, height: 26,
+        drawLCDTime(into: &s, date: date, accent: acc, topY: 12, height: 26,
                     calendar: calendar, use24Hour: use24Hour)
 
-        // Small AM/PM indicator in the top-right corner (12-hour mode only).
+        // Stacked "PM"/"AM" indicator (top-right), active period lit (12-hour mode only).
         if !use24Hour {
-            let isPM = calendar.component(.hour, from: date) >= 12
-            cornerLabel(into: &s, text: isPM ? "PM" : "AM", accent: acc)
+            amPmIndicator(into: &s, isPM: calendar.component(.hour, from: date) >= 12, accent: acc)
         }
 
-        // On the Pixoo the scrolling title is drawn by the device's own text engine, so this is
-        // called with an empty ticker; the bake path is kept for the renderer's generality.
+        // "Artist — Title" ticker: the clean pixel font scaled by `tickerScale` (2× on Pixoo),
+        // centered in the reserved bottom band. Scrolls in from the right and fully off the left
+        // exactly once — the render loop owns `scroll`.
         let text = ticker.trimmingCharacters(in: .whitespaces)
         if !text.isEmpty {
-            let cols = ArcadeFont.columns(for: text)
-            let fh = ArcadeFont.height
-            let ty = size - fh - 4
+            let scale = max(1, tickerScale)
+            let cols = PixelFont.columns(for: text)
+            let fh = PixelFont.height
+            let band = 16
+            let ty = (size - band) + (band - fh * scale) / 2   // centered in the band
             let tickerColor = Palette.mix(acc, PixelRGB(red: 255, green: 255, blue: 255), 0.35)
             for (i, col) in cols.enumerated() {
-                let sx = i - scroll + size           // enters from the right edge
-                if sx < 0 || sx >= size { continue }
-                for gy in 0..<fh where col[gy] { s.set(sx, ty + gy, tickerColor) }
+                for sxi in 0..<scale {
+                    let sx = i * scale + sxi - scroll + size   // enters from the right edge
+                    if sx < 0 || sx >= size { continue }
+                    for gy in 0..<fh where col[gy] {
+                        for syi in 0..<scale {
+                            let py = ty + gy * scale + syi
+                            if py >= 0, py < size { s.set(sx, py, tickerColor) }
+                        }
+                    }
+                }
             }
         }
-        _ = tickerScale
         return s
     }
 
@@ -154,30 +162,37 @@ enum DigitalClockRenderer {
     static func tickerSpan(for text: String, size: Int, tickerScale: Int) -> Int {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return 0 }
-        if size == 16 { return PixelFont.columns(for: trimmed).count * tickerScale + size }
-        return ArcadeFont.columns(for: trimmed).count + size   // 1:1 arcade font
+        return PixelFont.columns(for: trimmed).count * max(1, tickerScale) + size
     }
 
-    /// Small label (e.g. "AM"/"PM") in the top-right corner on a faint dark chip so it reads
-    /// over the background. Clean 5px pixel font, accent-tinted toward white.
-    private static func cornerLabel(into s: inout Surface, text: String, accent: PixelRGB) {
-        let cols = PixelFont.columns(for: text, tracking: 1)
-        let w = cols.count, h = PixelFont.height
-        let x0 = s.width - w - 2, y0 = 2
-        let ink = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), accent, 0.25)
-        for yy in (y0 - 1)...(y0 + h) {                 // faint chip behind the glyphs
+    /// Stacked "PM" (top) / "AM" (bottom) indicator in the top-right corner, on a dark chip
+    /// (like a vintage clock face): the active period is lit, the other dimmed.
+    private static func amPmIndicator(into s: inout Surface, isPM: Bool, accent: PixelRGB) {
+        let topCols = PixelFont.columns(for: "PM", tracking: 1)
+        let botCols = PixelFont.columns(for: "AM", tracking: 1)
+        let h = PixelFont.height
+        let w = max(topCols.count, botCols.count)
+        let x0 = s.width - w - 2
+        let yTop = 1, yBot = yTop + h + 1
+        for yy in (yTop - 1)...(yBot + h) {                 // dark chip behind both lines
             for xx in (x0 - 1)...(x0 + w) where xx >= 0 && xx < s.width && yy >= 0 && yy < s.height {
-                s.set(xx, yy, Palette.darken(s.at(xx, yy), 0.4))
+                s.set(xx, yy, Palette.darken(s.at(xx, yy), 0.16))
             }
         }
-        for (i, col) in cols.enumerated() {
-            let x = x0 + i
-            if x < 0 || x >= s.width { continue }
-            for y in 0..<h where col[y] {
-                let py = y0 + y
-                if py >= 0, py < s.height { s.set(x, py, ink) }
+        let lit = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), accent, 0.15)
+        let dim = Palette.darken(lit, 0.3)
+        func draw(_ cols: [[Bool]], _ oy: Int, _ color: PixelRGB) {
+            for (i, col) in cols.enumerated() {
+                let x = x0 + i
+                if x < 0 || x >= s.width { continue }
+                for gy in 0..<h where col[gy] {
+                    let py = oy + gy
+                    if py >= 0, py < s.height { s.set(x, py, color) }
+                }
             }
         }
+        draw(topCols, yTop, isPM ? lit : dim)
+        draw(botCols, yBot, isPM ? dim : lit)
     }
 
     // MARK: - 7-segment LCD time

@@ -215,15 +215,6 @@ final class NowPlayingEngine: ObservableObject {
 
     private func tickerText() -> String { nowPlaying == "—" ? "" : nowPlaying }
 
-    /// Tint for the native scrolling title: the album-art accent lifted toward white.
-    private var tickerColor: PixelRGB {
-        Palette.mix(Palette.vivid(accentColor ?? PixelRGB(red: 90, green: 180, blue: 255)),
-                    PixelRGB(red: 255, green: 255, blue: 255), 0.35)
-    }
-
-    /// Rough seconds for one native marquee cycle: ~6px per character at ~1px per 50 ms step.
-    private func nativeTickerDwell(chars: Int) -> Double { min(40, max(8, Double(chars) * 6.0 * 0.05)) }
-
     private func render(_ target: Target, scroll: Int) -> Surface {
         switch target {
         case .albumArt: return artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize)
@@ -355,6 +346,7 @@ final class NowPlayingEngine: ObservableObject {
     /// own text engine, then advances to the cover.
     private func runNativeLoop() async {
         guard let pixoo = connection.backend as? PixooBackend else { return }
+        await pixoo.clearText()   // wipe any stale native scrolling text from a prior session
 
         while running && !Task.isCancelled {
             if !connection.isConnected {
@@ -365,7 +357,6 @@ final class NowPlayingEngine: ObservableObject {
             }
 
             if displayMode == .visualizer {          // hand off to the device's own visualizer
-                await pixoo.clearText()
                 try? await pixoo.showVisualizer(style: visualizerStyle)
                 status = "Visualizer"
                 while running && !Task.isCancelled && connection.isConnected && displayMode == .visualizer {
@@ -408,21 +399,20 @@ final class NowPlayingEngine: ObservableObject {
     }
 
     /// Digital: fade in the hero card (clock over the cover or synthwave) with the title band
-    /// blank, then let the Pixoo's own text engine scroll the "Artist — Title" natively — its
-    /// font, firmware-smooth. The string is padded with blank space so the marquee reads as:
-    /// blank → title in from the right → blank gap → (loops). Dwell ~one cycle, then return so
-    /// the loop hands off to the cover (landing on the blank gap). With no title, hold the clock.
+    /// blank (title parked off the right edge), then render the title scrolling fully in and
+    /// back off the left exactly once — we own `scroll`, so it's a clean single pass: empty →
+    /// in → out → empty. Then return so the loop hands off to the cover. No song: hold the clock.
     private func presentDigital(on pixoo: PixooBackend, multi: Bool) async {
         let title = tickerText()
+        var scroll = 0
         func frame() -> Surface {
-            DigitalClockRenderer.surface(for: Date(), ticker: "", scroll: 0,
+            DigitalClockRenderer.surface(for: Date(), ticker: title, scroll: scroll,
                                          size: renderSize, tickerScale: profile.tickerScale,
                                          accent: accentColor, art: digitalArt)
         }
+        try? await pixoo.present(frame(), fade: true)   // enter: band blank, title off the right edge
 
         guard !title.isEmpty else {                     // no song: hold the clock, refresh per minute
-            await pixoo.clearText()
-            try? await pixoo.present(frame(), fade: true)
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: .seconds(max(4.0, dwellSeconds)))
             var lastMinute = clockMinute()
@@ -434,29 +424,20 @@ final class NowPlayingEngine: ObservableObject {
             return
         }
 
-        // Pad so the marquee starts blank, brings the title in from the right, and leaves a
-        // clean gap before it repeats (~11 chars spans the 64px panel at font 2's ~6px width).
-        let pad = String(repeating: " ", count: 11)
-        let text = PixooBackend.ScrollingText(string: pad + title + pad, color: tickerColor, y: renderSize - 13)
-        try? await pixoo.present(frame(), fade: true, text: text)   // fade in; firmware scrolls smoothly
-
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(nativeTickerDwell(chars: title.count + 22)))
-        var lastMinute = clockMinute()
+        let span = tickerSpan(title)
         while nativeLoopAlive {
-            if multi {
-                if clock.now >= deadline { return }     // → transition to the cover
-            } else if clockMinute() != lastMinute {     // only the clock showing: keep time current
-                lastMinute = clockMinute()
-                try? await pixoo.present(frame(), fade: false, text: text)   // re-assert (restarts the scroll)
+            scroll += profile.scrollStep
+            try? await pixoo.present(frame(), fade: false)
+            if scroll >= span {                         // one full pass: title fully off the left → empty
+                if multi { return }                     // → back to the album cover
+                scroll = 0                              // only the clock showing: loop the ticker
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 30_000_000)
         }
     }
 
     /// Analog: fade in, then refresh ~once a second for the dwell.
     private func presentAnalog(on pixoo: PixooBackend, multi: Bool) async {
-        await pixoo.clearText()
         func frame() -> Surface { ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor) }
         try? await pixoo.present(frame(), fade: true)
         let clock = ContinuousClock()
@@ -470,7 +451,6 @@ final class NowPlayingEngine: ObservableObject {
 
     /// Album cover: fade in, then hold for the dwell (re-sending only when a new cover arrives).
     private func presentCover(on pixoo: PixooBackend, multi: Bool) async {
-        await pixoo.clearText()
         try? await pixoo.present(artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize), fade: true)
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(2.0, dwellSeconds)))
