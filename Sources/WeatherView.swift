@@ -425,21 +425,17 @@ struct WeatherView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                TimelineView(.periodic(from: Date(), by: 0.5)) { ctx in
-                    Group {
+                PixooFrame {
+                    TimelineView(.periodic(from: Date(), by: 0.5)) { ctx in
                         if engine.hasData {
                             wxImage(engine.renderPage(engine.currentPage, phase: ctx.date.timeIntervalSince1970))
-                                .resizable().interpolation(.none).aspectRatio(1, contentMode: .fit)
+                                .resizable().interpolation(.none)
                         } else {
-                            RoundedRectangle(cornerRadius: 12).fill(.gray.opacity(0.15))
-                                .aspectRatio(1, contentMode: .fit)
-                                .overlay(ProgressView())
+                            Color.black.overlay(ProgressView().tint(.white))
                         }
                     }
-                    .frame(maxWidth: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.12)))
                 }
+                .frame(maxWidth: 300)
                 .padding(.top, 8)
 
                 VStack(spacing: 4) {

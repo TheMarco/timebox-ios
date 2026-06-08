@@ -5,6 +5,12 @@ enum HubModule: String, Hashable {
     case nowPlaying, clock, weather
 }
 
+/// Which Divoom display the user is targeting. Drives the connect buttons and which modules
+/// are offered — the 16×16 Timebox Evo only fits Now Playing.
+enum DeviceKind: String, CaseIterable {
+    case pixoo, timebox
+}
+
 /// Home screen: shared display connection + a list of modules. On launch it auto-reconnects
 /// (if it was connected last time) and reopens whichever module was last in use, so the app
 /// resumes right where it left off. New modules slot in as more `NavigationLink`s here.
@@ -15,6 +21,13 @@ struct ModuleHubView: View {
     @State private var didResume = false
     @State private var showPixooIPPrompt = false
     @State private var pixooIP = ""
+    @AppStorage("deviceKind") private var deviceKindRaw = DeviceKind.pixoo.rawValue
+    private var deviceKind: DeviceKind { DeviceKind(rawValue: deviceKindRaw) ?? .pixoo }
+    /// Clock + Weather are 64×64-only (Pixoo). A connected Timebox Evo (16×16) gets just Now Playing;
+    /// before connecting, the device dropdown decides.
+    private var showsRichModules: Bool {
+        connection.isConnected ? connection.profile.width >= 64 : deviceKind == .pixoo
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -25,16 +38,26 @@ struct ModuleHubView: View {
                         Button("Disconnect") { connection.disconnect() }
                             .foregroundStyle(.red)
                     } else {
-                        Button("Connect Timebox (Bluetooth)") { connection.connectTimebox() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(connection.busy)
-                        Button("Find Pixoo 64 on Wi-Fi") { connection.connectPixooAuto() }
-                            .disabled(connection.busy)
-                        Button("Enter Pixoo 64 IP…") {
-                            pixooIP = connection.lastPixooHost
-                            showPixooIPPrompt = true
+                        Picker("Device", selection: $deviceKindRaw) {
+                            Text("Pixoo 64").tag(DeviceKind.pixoo.rawValue)
+                            Text("Timebox Evo").tag(DeviceKind.timebox.rawValue)
                         }
-                        .disabled(connection.busy)
+                        .pickerStyle(.menu)
+
+                        if deviceKind == .pixoo {
+                            Button("Find Pixoo 64 on Wi-Fi") { connection.connectPixooAuto() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(connection.busy)
+                            Button("Enter Pixoo 64 IP…") {
+                                pixooIP = connection.lastPixooHost
+                                showPixooIPPrompt = true
+                            }
+                            .disabled(connection.busy)
+                        } else {
+                            Button("Connect Timebox (Bluetooth)") { connection.connectTimebox() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(connection.busy)
+                        }
                     }
                 }
 
@@ -44,15 +67,17 @@ struct ModuleHubView: View {
                     }
                     .disabled(!connection.isConnected)
 
-                    NavigationLink(value: HubModule.clock) {
-                        Label("Clock", systemImage: "clock")
-                    }
-                    .disabled(!connection.isConnected)
+                    if showsRichModules {
+                        NavigationLink(value: HubModule.clock) {
+                            Label("Clock", systemImage: "clock")
+                        }
+                        .disabled(!connection.isConnected)
 
-                    NavigationLink(value: HubModule.weather) {
-                        Label("Weather", systemImage: "cloud.sun")
+                        NavigationLink(value: HubModule.weather) {
+                            Label("Weather", systemImage: "cloud.sun")
+                        }
+                        .disabled(!connection.isConnected)
                     }
-                    .disabled(!connection.isConnected)
                 }
 
                 if !connection.isConnected {
@@ -91,7 +116,8 @@ struct ModuleHubView: View {
             // Once the (auto-)connection comes up on launch, reopen the last-used module.
             if connected, !didResume, let module = HubModule(rawValue: lastModule) {
                 didResume = true
-                path = [module]
+                // Don't reopen a 64×64-only module (Clock/Weather) on a 16×16 Timebox.
+                if module == .nowPlaying || connection.profile.width >= 64 { path = [module] }
             }
         }
         .onChange(of: path) { _, newPath in

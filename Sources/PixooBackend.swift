@@ -83,6 +83,7 @@ final class PixooBackend: DisplayBackend {
         // so retry for a few seconds to let the user tap "Allow" without re-tapping Connect.
         var lastError: Error?
         for attempt in 0..<6 {
+            try Task.checkCancellation()        // left the module mid-reconnect — stop retrying
             do {
                 picId = try await currentGifId()
                 if picId >= resetThreshold {
@@ -220,6 +221,10 @@ final class PixooBackend: DisplayBackend {
         let data: Data
         do {
             (data, _) = try await session.data(for: request)
+        } catch is CancellationError {
+            throw CancellationError()           // task cancelled (e.g. left the module) — link is fine
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            throw CancellationError()           // URLSession reports cancellation as .cancelled
         } catch {
             connected = false
             throw PixooError.unreachable(host)

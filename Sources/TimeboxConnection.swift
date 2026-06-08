@@ -136,6 +136,8 @@ final class TimeboxConnection: ObservableObject {
         guard let backend else { throw PixooError.unreachable("display") }
         do {
             try await backend.send(surface)
+        } catch is CancellationError {
+            throw CancellationError()   // navigating away cancels the in-flight send — not a drop
         } catch {
             if backend.profile.drivesNatively { isConnected = false }
             throw error

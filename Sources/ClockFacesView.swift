@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreGraphics
+import UIKit
 import TimeboxKit
 
 /// Clock module — ten 64×64 clock faces (digital, analog, flip, and a few weird ones). The
@@ -374,13 +375,13 @@ struct ClockFacesView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                TimelineView(.periodic(from: Date(), by: 0.25)) { ctx in
-                    faceImage(driver.face.render(size: 64, date: ctx.date))
-                        .resizable().interpolation(.none).aspectRatio(1, contentMode: .fit)
-                        .frame(maxWidth: 240)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.12)))
+                PixooFrame {
+                    TimelineView(.periodic(from: Date(), by: 0.25)) { ctx in
+                        faceImage(driver.face.render(size: 64, date: ctx.date))
+                            .resizable().interpolation(.none)
+                    }
                 }
+                .frame(maxWidth: 300)
                 .padding(.top, 8)
 
                 Text(connection.isConnected ? "Showing \(driver.face.name) on \(connection.profile.width)×\(connection.profile.height)" : "Not connected")
@@ -426,4 +427,69 @@ private func faceImage(_ s: Surface) -> Image {
         return Image(decorative: cg, scale: 1)
     }
     return Image(systemName: "clock")
+}
+
+// MARK: - Pixoo 64 bezel
+
+/// The bundled photo of a real Pixoo 64 (black bezel + grey display square).
+let pixooFrameImage: UIImage? = {
+    if let url = Bundle.main.url(forResource: "frame", withExtension: "jpg"),
+       let data = try? Data(contentsOf: url) { return UIImage(data: data) }
+    return UIImage(named: "frame")
+}()
+
+/// Wraps a live 64×64 preview inside a photo of a real Pixoo 64, placing the render exactly
+/// in the grey display square (~91.4% of the frame, centered). Falls back to a plain rounded
+/// panel if the photo can't be loaded. Shared by the Clock and Weather previews.
+struct PixooFrame<Content: View>: View {
+    private let content: Content
+    private let pixels: Int
+    init(pixels: Int = 64, @ViewBuilder _ content: () -> Content) {
+        self.pixels = pixels
+        self.content = content()
+    }
+
+    var body: some View {
+        if let img = pixooFrameImage {
+            Image(uiImage: img)
+                .resizable()
+                .aspectRatio(1, contentMode: .fit)
+                .overlay(
+                    GeometryReader { geo in
+                        let side = min(geo.size.width, geo.size.height) * 0.914
+                        content
+                            .frame(width: side, height: side)
+                            .overlay(PixelGrid(pixels: pixels))   // faint gaps between the LEDs
+                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    }
+                )
+        } else {
+            content
+                .aspectRatio(1, contentMode: .fit)
+                .overlay(PixelGrid(pixels: pixels))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.12)))
+        }
+    }
+}
+
+/// Faint dark gridlines on every pixel boundary, mimicking the gaps between a Pixoo's physical
+/// LEDs so the preview reads as a real panel rather than a flat image.
+private struct PixelGrid: View {
+    let pixels: Int
+    var body: some View {
+        Canvas { ctx, size in
+            let cw = size.width / CGFloat(pixels)
+            let ch = size.height / CGFloat(pixels)
+            var path = Path()
+            for i in 0...pixels {
+                let x = CGFloat(i) * cw   // exact pixel boundary so the grid sits on each LED edge
+                path.move(to: CGPoint(x: x, y: 0)); path.addLine(to: CGPoint(x: x, y: size.height))
+                let y = CGFloat(i) * ch
+                path.move(to: CGPoint(x: 0, y: y)); path.addLine(to: CGPoint(x: size.width, y: y))
+            }
+            ctx.stroke(path, with: .color(.black.opacity(0.3)), lineWidth: 0.5)
+        }
+        .allowsHitTesting(false)
+    }
 }

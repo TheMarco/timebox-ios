@@ -352,7 +352,11 @@ final class NowPlayingEngine: ObservableObject {
     /// or a brightness fade when we don't know the outgoing frame.
     private func enter(_ pixoo: PixooBackend, _ frame: Surface) async {
         if let from = lastShown, from.width == frame.width, from.height == frame.height {
-            for f in Blend.transition(from: from, to: frame, steps: 8) {
+            // Build the mosaic transition off the main thread — on the Pixoo it's a 64×64
+            // pixelate burst that would otherwise stall the UI (and the navigation pop).
+            let frames = await Task.detached { Blend.transition(from: from, to: frame, steps: 8) }.value
+            for f in frames {
+                if !nativeLoopAlive { break }
                 try? await pixoo.present(f, fade: false)
             }
         } else {
@@ -396,7 +400,9 @@ final class NowPlayingEngine: ObservableObject {
 
             let items = targets()
             if items.isEmpty {                       // nothing selected: just show the clock
-                await show(pixoo, ClockRenderer.surface(for: Date(), size: renderSize))
+                let size = renderSize
+                let clk = await Task.detached { ClockRenderer.surface(for: Date(), size: size) }.value
+                await show(pixoo, clk)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 continue
             }
@@ -433,20 +439,24 @@ final class NowPlayingEngine: ObservableObject {
     /// in → out → empty. Then return so the loop hands off to the cover. No song: hold the clock.
     private func presentDigital(on pixoo: PixooBackend, multi: Bool) async {
         let title = tickerText()
+        let size = renderSize, scale = profile.tickerScale
         var scroll = 0
-        func frame() -> Surface {
-            DigitalClockRenderer.surface(for: Date(), ticker: title, scroll: scroll,
-                                         size: renderSize, tickerScale: profile.tickerScale,
-                                         accent: accentColor, art: digitalArt, progress: playbackProgress())
+        func frame() async -> Surface {
+            let acc = accentColor, art = digitalArt, prog = playbackProgress(), sc = scroll
+            return await Task.detached {
+                DigitalClockRenderer.surface(for: Date(), ticker: title, scroll: sc,
+                                             size: size, tickerScale: scale,
+                                             accent: acc, art: art, progress: prog)
+            }.value
         }
-        await enter(pixoo, frame())                     // enter: band blank, title off the right edge
+        await enter(pixoo, await frame())               // enter: band blank, title off the right edge
 
         guard !title.isEmpty else {                     // no song: hold the clock, refresh per minute
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: .seconds(max(4.0, dwellSeconds)))
             var lastMinute = clockMinute()
             while nativeLoopAlive {
-                if clockMinute() != lastMinute { lastMinute = clockMinute(); await show(pixoo, frame()) }
+                if clockMinute() != lastMinute { lastMinute = clockMinute(); await show(pixoo, await frame()) }
                 if multi && clock.now >= deadline { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
@@ -456,7 +466,7 @@ final class NowPlayingEngine: ObservableObject {
         let span = tickerSpan(title)
         while nativeLoopAlive {
             scroll += profile.scrollStep
-            await show(pixoo, frame())
+            await show(pixoo, await frame())
             if scroll >= span {                         // one full pass: title fully off the left → empty
                 if multi { return }                     // → back to the album cover
                 scroll = 0                              // only the clock showing: loop the ticker
@@ -467,12 +477,16 @@ final class NowPlayingEngine: ObservableObject {
 
     /// Analog: fade in, then refresh ~once a second for the dwell.
     private func presentAnalog(on pixoo: PixooBackend, multi: Bool) async {
-        func frame() -> Surface { ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor, art: digitalArt) }
-        await enter(pixoo, frame())
+        let size = renderSize
+        func frame() async -> Surface {
+            let acc = accentColor, art = digitalArt
+            return await Task.detached { ClockRenderer.surface(for: Date(), size: size, accent: acc, art: art) }.value
+        }
+        await enter(pixoo, await frame())
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(2.0, dwellSeconds)))
         while nativeLoopAlive {
-            await show(pixoo, frame())
+            await show(pixoo, await frame())
             if multi && clock.now >= deadline { break }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
@@ -481,12 +495,16 @@ final class NowPlayingEngine: ObservableObject {
     /// Album cover: fade in, then refresh periodically so the song-progress bar advances
     /// (and a new cover is picked up) over the dwell.
     private func presentCover(on pixoo: PixooBackend, multi: Bool) async {
-        func coverFrame() -> Surface {
-            var f = artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize)
-            if let p = playbackProgress() { DigitalClockRenderer.progressReveal(into: &f, progress: p) }
-            return f
+        let size = renderSize
+        func coverFrame() async -> Surface {
+            let art = artSurface, prog = playbackProgress()
+            return await Task.detached {
+                var f = art ?? ClockRenderer.surface(for: Date(), size: size)
+                if let p = prog { DigitalClockRenderer.progressReveal(into: &f, progress: p) }
+                return f
+            }.value
         }
-        await enter(pixoo, coverFrame())
+        await enter(pixoo, await coverFrame())
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(2.0, dwellSeconds)))
         var lastArtVersion = artVersion
@@ -494,7 +512,7 @@ final class NowPlayingEngine: ObservableObject {
             // Re-send to advance the progress reveal, or when a new cover arrives.
             if playbackProgress() != nil || artVersion != lastArtVersion {
                 lastArtVersion = artVersion
-                await show(pixoo, coverFrame())
+                await show(pixoo, await coverFrame())
             }
             if multi && clock.now >= deadline { break }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
