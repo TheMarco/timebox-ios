@@ -2,7 +2,7 @@ import SwiftUI
 
 /// A module the hub can navigate to (and remember across launches).
 enum HubModule: String, Hashable {
-    case nowPlaying, clock
+    case nowPlaying, clock, weather
 }
 
 /// Home screen: shared display connection + a list of modules. On launch it auto-reconnects
@@ -48,6 +48,11 @@ struct ModuleHubView: View {
                         Label("Clock", systemImage: "clock")
                     }
                     .disabled(!connection.isConnected)
+
+                    NavigationLink(value: HubModule.weather) {
+                        Label("Weather", systemImage: "cloud.sun")
+                    }
+                    .disabled(!connection.isConnected)
                 }
 
                 if !connection.isConnected {
@@ -67,6 +72,7 @@ struct ModuleHubView: View {
                 switch module {
                 case .nowPlaying: NowPlayingView(connection: connection)
                 case .clock: ClockFacesView(connection: connection)
+                case .weather: WeatherView(connection: connection)
                 }
             }
             .alert("Connect to Pixoo 64", isPresented: $showPixooIPPrompt) {
