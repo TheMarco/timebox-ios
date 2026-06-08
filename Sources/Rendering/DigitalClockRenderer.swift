@@ -126,7 +126,7 @@ enum DigitalClockRenderer {
         drawLCDTime(into: &s, date: date, accent: acc, topY: 12, height: 26,
                     calendar: calendar, use24Hour: use24Hour)
 
-        // Stacked "PM"/"AM" indicator (top-right), active period lit (12-hour mode only).
+        // "PM" or "AM" indicator (whichever is active), top-right (12-hour mode only).
         if !use24Hour {
             amPmIndicator(into: &s, isPM: calendar.component(.hour, from: date) >= 12, accent: acc)
         }
@@ -165,34 +165,27 @@ enum DigitalClockRenderer {
         return PixelFont.columns(for: trimmed).count * max(1, tickerScale) + size
     }
 
-    /// Stacked "PM" (top) / "AM" (bottom) indicator in the top-right corner, on a dark chip
-    /// (like a vintage clock face): the active period is lit, the other dimmed.
+    /// "PM" or "AM" (whichever is active) in the top-right corner, on a dark chip so it reads
+    /// over the background — pixel font, accent-tinted toward white.
     private static func amPmIndicator(into s: inout Surface, isPM: Bool, accent: PixelRGB) {
-        let topCols = PixelFont.columns(for: "PM", tracking: 1)
-        let botCols = PixelFont.columns(for: "AM", tracking: 1)
+        let cols = PixelFont.columns(for: isPM ? "PM" : "AM", tracking: 1)
         let h = PixelFont.height
-        let w = max(topCols.count, botCols.count)
-        let x0 = s.width - w - 2
-        let yTop = 1, yBot = yTop + h + 1
-        for yy in (yTop - 1)...(yBot + h) {                 // dark chip behind both lines
+        let w = cols.count
+        let x0 = s.width - w - 2, y0 = 2
+        for yy in (y0 - 1)...(y0 + h) {                      // dark chip behind the glyphs
             for xx in (x0 - 1)...(x0 + w) where xx >= 0 && xx < s.width && yy >= 0 && yy < s.height {
                 s.set(xx, yy, Palette.darken(s.at(xx, yy), 0.16))
             }
         }
         let lit = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), accent, 0.15)
-        let dim = Palette.darken(lit, 0.3)
-        func draw(_ cols: [[Bool]], _ oy: Int, _ color: PixelRGB) {
-            for (i, col) in cols.enumerated() {
-                let x = x0 + i
-                if x < 0 || x >= s.width { continue }
-                for gy in 0..<h where col[gy] {
-                    let py = oy + gy
-                    if py >= 0, py < s.height { s.set(x, py, color) }
-                }
+        for (i, col) in cols.enumerated() {
+            let x = x0 + i
+            if x < 0 || x >= s.width { continue }
+            for gy in 0..<h where col[gy] {
+                let py = y0 + gy
+                if py >= 0, py < s.height { s.set(x, py, lit) }
             }
         }
-        draw(topCols, yTop, isPM ? lit : dim)
-        draw(botCols, yBot, isPM ? dim : lit)
     }
 
     // MARK: - 7-segment LCD time
