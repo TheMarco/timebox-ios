@@ -10,7 +10,7 @@ targets:
   TimeboxiOS:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources: [Sources, Fonts]
     dependencies:
       - package: TimeboxStudio
         product: TimeboxKit
