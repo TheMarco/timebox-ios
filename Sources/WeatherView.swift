@@ -10,6 +10,10 @@ import TimeboxKit
 
 // MARK: - Renderer (supersampled, anti-aliased)
 
+private extension PixelRGB {
+    init(_ r: Int, _ g: Int, _ b: Int) { self.init(red: UInt8(max(0,min(255,r))), green: UInt8(max(0,min(255,g))), blue: UInt8(max(0,min(255,b)))) }
+}
+
 private struct RGBf { var r=0.0, g=0.0, b=0.0; init(_ r:Double,_ g:Double,_ b:Double){self.r=r;self.g=g;self.b=b}
     init(_ r:Int,_ g:Int,_ b:Int){ self.r=Double(r)/255; self.g=Double(g)/255; self.b=Double(b)/255 } }
 private func fmix(_ a:RGBf,_ b:RGBf,_ t:Double)->RGBf{ let t=max(0,min(1,t)); return RGBf(a.r+(b.r-a.r)*t,a.g+(b.g-a.g)*t,a.b+(b.b-a.b)*t) }
@@ -135,9 +139,83 @@ enum WeatherRenderer {
         for yy in 0..<degW { for xx in 0..<degW { let dx=Double(xx)-Double(degW)/2+0.5, dy=Double(yy)-Double(degW)/2+0.5
             let d=(dx*dx+dy*dy).squareRoot(); if d<Double(degW)/2 && d>Double(degW)/2-1.6 { s.set(x+xx,y+yy,c) } } }
     }
-    private static func smallNum(_ s:inout Surface,_ v:Int,_ ox:Int,_ oy:Int,_ c:PixelRGB){
+    fileprivate static func smallNum(_ s:inout Surface,_ v:Int,_ ox:Int,_ oy:Int,_ c:PixelRGB){
         var x=ox; for ch in String(v) { let d=Int(String(ch))!
             for (r,row) in SM[d].enumerated(){ for (i,p) in row.enumerated() where p=="#" { s.set(x+i,oy+r,c) } }; x+=4 }
+    }
+}
+
+// MARK: - Info pages
+
+private let WLET:[Character:[String]]=[
+ "A":[".##.","#..#","####","#..#","#..#"],"B":["###.","#..#","###.","#..#","###."],"C":[".###","#...","#...","#...",".###"],
+ "D":["###.","#..#","#..#","#..#","###."],"E":["####","#...","###.","#...","####"],"F":["####","#...","###.","#...","#..."],
+ "G":[".###","#...","#.##","#..#",".###"],"H":["#..#","#..#","####","#..#","#..#"],"I":["###",".#.",".#.",".#.","###"],
+ "L":["#...","#...","#...","#...","####"],"M":["#...#","##.##","#.#.#","#...#","#...#"],"N":["#..#","##.#","#.##","#..#","#..#"],
+ "O":[".##.","#..#","#..#","#..#",".##."],"P":["###.","#..#","###.","#...","#..."],"R":["###.","#..#","###.","#.#.","#..#"],
+ "S":[".###","#...",".##.","...#","###."],"T":["#####","..#..","..#..","..#..","..#.."],"U":["#..#","#..#","#..#","#..#",".##."],
+ "V":["#...#","#...#",".#.#.",".#.#.","..#.."],"W":["#...#","#...#","#.#.#","#.#.#",".#.#."],"Y":["#..#","#..#",".##.","..#.","..#."],
+ " ":[".....",".....",".....",".....","....."]]
+private func wlw(_ ch: Character)->Int{ ch==" " ? 2 : (WLET[ch]?.first?.count ?? 4) }
+private func wtextS(_ s: inout Surface,_ str: String,_ cx: Int,_ y: Int,_ c: PixelRGB){
+    let w=str.reduce(0){$0+wlw($1)+1}-1; var x=cx-w/2
+    for ch in str { if let g=WLET[ch] ?? WLET[" "] { for (r,row) in g.enumerated(){ for (i,p) in row.enumerated() where p=="#" { s.set(x+i,y+r,c) } } }; x+=wlw(ch)+1 }
+}
+private func sdiscS(_ s: inout Surface,_ cx: Double,_ cy: Double,_ r: Double,_ c: PixelRGB,_ a: Double=1){
+    let x0=Int(cx-r-1),x1=Int(cx+r+1),y0=Int(cy-r-1),y1=Int(cy+r+1)
+    for y in y0...y1 { for x in x0...x1 { if x<0||x>63||y<0||y>63 {continue}
+        let d=((Double(x)+0.5-cx)*(Double(x)+0.5-cx)+(Double(y)+0.5-cy)*(Double(y)+0.5-cy)).squareRoot()
+        let cov=max(0,min(1,r-d+0.5)); if cov>0 { s.set(x,y,Palette.mix(s.at(x,y),c,a*cov)) } }}
+}
+private func slineS(_ s: inout Surface,_ x0: Double,_ y0: Double,_ x1: Double,_ y1: Double,_ c: PixelRGB){
+    let n=Int(max(abs(x1-x0),abs(y1-y0)))+1; for i in 0...n { let t=Double(i)/Double(n); sdiscS(&s,x0+(x1-x0)*t,y0+(y1-y0)*t,0.8,c) }
+}
+private func sgradS(_ s: inout Surface,_ top: PixelRGB,_ bot: PixelRGB){ for y in 0..<64 { let c=Palette.mix(top,bot,Double(y)/63); for x in 0..<64 { s.set(x,y,c) } } }
+private func miniIconS(_ s: inout Surface,_ cx: Int,_ cy: Int,_ cond: Int,_ day: Bool){
+    let X=Double(cx), Y=Double(cy)
+    func cloud(_ col: PixelRGB){ sdiscS(&s,X-3,Y+1,3,col); sdiscS(&s,X+3,Y+1,3,col); sdiscS(&s,X,Y-1,3.6,col); sdiscS(&s,X,Y+2,3,col) }
+    switch cond {
+    case 0: if day { sdiscS(&s,X,Y,3.2,PixelRGB(255,210,90)); sdiscS(&s,X,Y,2.4,PixelRGB(255,240,170)); for k in 0..<8 { let a=Double(k)*Double.pi/4; slineS(&s,X+cos(a)*4,Y+sin(a)*4,X+cos(a)*5.5,Y+sin(a)*5.5,PixelRGB(255,220,110)) } }
+            else { sdiscS(&s,X,Y,3.4,PixelRGB(235,240,255)); sdiscS(&s,X+1.6,Y-1,3,PixelRGB(20,24,54)) }
+    case 1: if day { sdiscS(&s,X-2,Y-2,2.6,PixelRGB(255,225,120)) }; cloud(PixelRGB(225,232,245))
+    case 2: cloud(PixelRGB(200,208,224))
+    case 3: cloud(PixelRGB(205,210,220)); for k in 0..<3 { slineS(&s,X-4,Y+4+Double(k)*1.5,X+4,Y+4+Double(k)*1.5,PixelRGB(220,224,232)) }
+    case 4: cloud(PixelRGB(180,190,212)); for k in 0..<3 { let dx=Double(k-1)*3; slineS(&s,X+dx,Y+4,X+dx-1,Y+7,PixelRGB(150,195,255)) }
+    case 5: cloud(PixelRGB(215,224,242)); for k in 0..<3 { sdiscS(&s,X+Double(k-1)*3,Y+5.5,1.0,PixelRGB(245,250,255)) }
+    default: cloud(PixelRGB(120,126,150)); slineS(&s,X,Y+3,X-2,Y+6,PixelRGB(255,230,120)); slineS(&s,X-2,Y+6,X+1,Y+8,PixelRGB(255,230,120))
+    }
+}
+
+extension WeatherRenderer {
+    /// Hourly: temperature sparkline + values + hour labels. `hrs` = (hour24, temp, cond).
+    static func hourly(_ hrs: [(Int,Int,Int)]) -> Surface {
+        var s=Surface(width:64,height:64); sgradS(&s,PixelRGB(20,26,50),PixelRGB(44,52,86))
+        wtextS(&s,"HOURLY",32,2,PixelRGB(150,170,220))
+        guard hrs.count>=2 else { return s }
+        let temps=hrs.map{$0.1}; let mn=Double(temps.min()!), mx=Double(temps.max()!), rng=max(1,mx-mn)
+        let gx0=8.0,gx1=56.0,gtop=24.0,gbot=42.0
+        func px(_ i:Int)->Double{ gx0+(gx1-gx0)*Double(i)/Double(hrs.count-1) }
+        func py(_ t:Int)->Double{ gbot-(gbot-gtop)*(Double(t)-mn)/rng }
+        for i in 0..<hrs.count-1 { slineS(&s,px(i),py(hrs[i].1),px(i+1),py(hrs[i+1].1),PixelRGB(120,200,255)) }
+        for (i,h) in hrs.enumerated() { let x=Int(px(i)), y=Int(py(h.1))
+            sdiscS(&s,Double(x),Double(y),1.6,PixelRGB(255,255,255)); smallNum(&s,h.1,x-3,y-9,PixelRGB(235,240,255)); smallNum(&s,h.0,x-3,52,PixelRGB(150,160,190)) }
+        return s
+    }
+    /// Daily: day rows with a mini icon + hi/lo. `days` = (label, hi, lo, cond).
+    static func daily(_ days: [(String,Int,Int,Int)]) -> Surface {
+        var s=Surface(width:64,height:64); sgradS(&s,PixelRGB(28,32,56),PixelRGB(48,54,84))
+        for (i,d) in days.prefix(4).enumerated() { let y=4+i*12
+            wtextS(&s,d.0,11,y,PixelRGB(225,230,245)); miniIconS(&s,30,y+3,d.3,true)
+            smallNum(&s,d.1,40,y,PixelRGB(255,180,120)); smallNum(&s,d.2,52,y,PixelRGB(150,190,255)) }
+        return s
+    }
+    /// Details: 2×2 grid (feels / humidity / wind / uv).
+    static func details(_ feels: Int,_ hum: Int,_ wind: Int,_ uv: Int) -> Surface {
+        var s=Surface(width:64,height:64); sgradS(&s,PixelRGB(30,36,60),PixelRGB(50,56,88))
+        func cell(_ lab: String,_ v: Int,_ cx: Int,_ cy: Int,_ vc: PixelRGB){ wtextS(&s,lab,cx,cy,PixelRGB(150,160,195)); let str=String(v); var x=cx-(str.count*4-1)/2; for ch in str { let d=Int(String(ch))!; for (r,row) in SM[d].enumerated(){ for (i,p) in row.enumerated() where p=="#" { s.set(x+i,cy+8+r,vc) } }; x+=4 } }
+        cell("FEELS",feels,17,8,PixelRGB(255,255,255)); cell("HUM",hum,47,8,PixelRGB(160,220,255))
+        cell("WIND",wind,17,38,PixelRGB(200,235,200)); cell("UV",uv,47,38,PixelRGB(255,210,120))
+        return s
     }
 }
 
@@ -190,8 +268,14 @@ final class WeatherEngine: ObservableObject {
     @Published private(set) var hasData = false
     @Published var useCelsius: Bool { didSet { UserDefaults.standard.set(useCelsius, forKey: "wx.celsius") } }
 
+    enum Page { case current, hourly, daily, details }
+    @Published private(set) var currentPage: Page = .current
     private var cond = 0, isDay = true
     private var tempC = 0.0, hiC = 0.0, loC = 0.0
+    private var hourlyC: [(Int, Double, Int)] = []            // (hour24, tempC, cond)
+    private var dailyC: [(String, Double, Double, Int)] = []  // (label, hiC, loC, cond)
+    private var feelsC = 0.0, windKph = 0.0
+    private var humidity = 0, uvIdx = 0
     private let connection: TimeboxConnection
     private let locator = LocationManager()
     private var loop: Task<Void, Never>?
@@ -231,6 +315,18 @@ final class WeatherEngine: ObservableObject {
                 hiC = today.highTemperature.converted(to: .celsius).value
                 loC = today.lowTemperature.converted(to: .celsius).value
             }
+            let now = Date()
+            hourlyC = w.hourlyForecast.filter { $0.date >= now.addingTimeInterval(-1800) }.prefix(6).map {
+                (Calendar.current.component(.hour, from: $0.date), $0.temperature.converted(to: .celsius).value, condCode($0.condition))
+            }
+            let df = DateFormatter(); df.dateFormat = "EEE"
+            dailyC = w.dailyForecast.prefix(4).map {
+                (df.string(from: $0.date).uppercased(), $0.highTemperature.converted(to: .celsius).value, $0.lowTemperature.converted(to: .celsius).value, condCode($0.condition))
+            }
+            feelsC = w.currentWeather.apparentTemperature.converted(to: .celsius).value
+            humidity = Int((w.currentWeather.humidity * 100).rounded())
+            windKph = w.currentWeather.wind.speed.converted(to: .kilometersPerHour).value
+            uvIdx = w.currentWeather.uvIndex.value
             conditionText = w.currentWeather.condition.description
             hasData = true
             lastFetch = Date()
@@ -240,26 +336,48 @@ final class WeatherEngine: ObservableObject {
         }
     }
 
+    /// Cycle the pages, mosaic-transitioning between them. The current scene animates while it
+    /// dwells; the forecast/detail pages are static.
     private func renderLoop() async {
         let start = Date()
+        var last: Surface?
+        var idx = 0
         while !Task.isCancelled {
-            if !connection.isConnected { await connection.attemptReconnect() }
-            else if hasData {
-                try? await connection.send(currentSurface(phase: Date().timeIntervalSince(start)))
-            }
+            if !connection.isConnected { await connection.attemptReconnect(); try? await Task.sleep(nanoseconds: 1_500_000_000); continue }
+            if !hasData { try? await Task.sleep(nanoseconds: 300_000_000); continue }
             if let l = lastLocation, Date().timeIntervalSince(lastFetch) > 900 { await fetch(l) }   // refresh ~15 min
-            try? await Task.sleep(nanoseconds: 90_000_000)
+            let pages = activePages(); let page = pages[idx % pages.count]; currentPage = page
+            let entry = sized(renderPage(page, phase: Date().timeIntervalSince(start)))
+            if let from = last, from.width == entry.width, from.height == entry.height {
+                for f in Blend.transition(from: from, to: entry, steps: 8) { if Task.isCancelled { return }; try? await connection.send(f); last = f }
+            } else { try? await connection.send(entry); last = entry }
+            let deadline = Date().addingTimeInterval(page == .current ? 8 : 6)
+            while Date() < deadline && !Task.isCancelled && connection.isConnected {
+                if page == .current { let f = sized(renderPage(.current, phase: Date().timeIntervalSince(start))); try? await connection.send(f); last = f; try? await Task.sleep(nanoseconds: 90_000_000) }
+                else { try? await Task.sleep(nanoseconds: 250_000_000) }
+            }
+            idx += 1
         }
     }
-
-    /// The current scene at the given animation phase (seconds). 64×64; box-shrunk for a 16×16 panel.
-    func currentSurface(phase: Double) -> Surface {
-        let t = useCelsius ? tempC : tempC*9/5+32
-        let h = useCelsius ? hiC : hiC*9/5+32
-        let lo = useCelsius ? loC : loC*9/5+32
-        let s = WeatherRenderer.surface(cond: cond, isDay: isDay, temp: Int(t.rounded()), hi: Int(h.rounded()), lo: Int(lo.rounded()), phase: phase)
-        return connection.profile.width == 64 ? s : shrink(s, to: connection.profile.width)
+    private func activePages() -> [Page] {
+        var p: [Page] = [.current]
+        if hourlyC.count >= 2 { p.append(.hourly) }
+        if !dailyC.isEmpty { p.append(.daily) }
+        p.append(.details)
+        return p
     }
+
+    /// Render a page at 64×64. `phase` (seconds) animates the current scene.
+    func renderPage(_ page: Page, phase: Double) -> Surface {
+        func disp(_ c: Double) -> Int { Int((useCelsius ? c : c*9/5+32).rounded()) }
+        switch page {
+        case .current: return WeatherRenderer.surface(cond: cond, isDay: isDay, temp: disp(tempC), hi: disp(hiC), lo: disp(loC), phase: phase)
+        case .hourly:  return WeatherRenderer.hourly(hourlyC.map { ($0.0, disp($0.1), $0.2) })
+        case .daily:   return WeatherRenderer.daily(dailyC.map { ($0.0, disp($0.1), disp($0.2), $0.3) })
+        case .details: return WeatherRenderer.details(disp(feelsC), humidity, Int((useCelsius ? windKph : windKph*0.621371).rounded()), uvIdx)
+        }
+    }
+    private func sized(_ s: Surface) -> Surface { connection.profile.width == 64 ? s : shrink(s, to: connection.profile.width) }
 
     private func shrink(_ s: Surface, to size: Int) -> Surface {
         guard size < 64, 64 % size == 0 else { return s }
@@ -286,7 +404,7 @@ struct WeatherView: View {
                 TimelineView(.periodic(from: Date(), by: 0.1)) { ctx in
                     Group {
                         if engine.hasData {
-                            wxImage(engine.currentSurface(phase: ctx.date.timeIntervalSince1970))
+                            wxImage(engine.renderPage(engine.currentPage, phase: ctx.date.timeIntervalSince1970))
                                 .resizable().interpolation(.none).aspectRatio(1, contentMode: .fit)
                         } else {
                             RoundedRectangle(cornerRadius: 12).fill(.gray.opacity(0.15))

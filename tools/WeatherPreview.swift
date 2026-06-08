@@ -169,6 +169,77 @@ func weather(_ cond: Int,_ day: Bool,_ temp: Int,_ hi: Int,_ lo: Int,_ phase: Do
     return s
 }
 
+// ---- info pages ----
+let WLET:[Character:[String]]=[
+ "A":[".##.","#..#","####","#..#","#..#"],"B":["###.","#..#","###.","#..#","###."],"C":[".###","#...","#...","#...",".###"],
+ "D":["###.","#..#","#..#","#..#","###."],"E":["####","#...","###.","#...","####"],"F":["####","#...","###.","#...","#..."],
+ "G":[".###","#...","#.##","#..#",".###"],"H":["#..#","#..#","####","#..#","#..#"],"I":["###",".#.",".#.",".#.","###"],
+ "L":["#...","#...","#...","#...","####"],"M":["#...#","##.##","#.#.#","#...#","#...#"],"N":["#..#","##.#","#.##","#..#","#..#"],
+ "O":[".##.","#..#","#..#","#..#",".##."],"P":["###.","#..#","###.","#...","#..."],"R":["###.","#..#","###.","#.#.","#..#"],
+ "S":[".###","#...",".##.","...#","###."],"T":["#####","..#..","..#..","..#..","..#.."],"U":["#..#","#..#","#..#","#..#",".##."],
+ "V":["#...#","#...#",".#.#.",".#.#.","..#.."],"W":["#...#","#...#","#.#.#","#.#.#",".#.#."],"Y":["#..#","#..#",".##.","..#.","..#."],
+ " ":[".....",".....",".....",".....","....."]]
+func wlw(_ ch: Character)->Int{ ch==" " ? 2 : (WLET[ch]?.first?.count ?? 4) }
+func wtext(_ s: inout Surf,_ str: String,_ cx: Int,_ y: Int,_ c: PixelRGB){
+    let w=str.reduce(0){$0+wlw($1)+1}-1; var x=cx-w/2
+    for ch in str { if let g=WLET[ch] ?? WLET[" "] { for (r,row) in g.enumerated(){ for (i,p) in row.enumerated() where p=="#" { s.set(x+i,y+r,c) } } }; x+=wlw(ch)+1 }
+}
+func sdisc(_ s: inout Surf,_ cx: Double,_ cy: Double,_ r: Double,_ c: PixelRGB,_ a: Double=1){
+    let x0=Int(cx-r-1),x1=Int(cx+r+1),y0=Int(cy-r-1),y1=Int(cy+r+1)
+    for y in y0...y1 { for x in x0...x1 { if x<0||x>63||y<0||y>63 {continue}
+        let d=((Double(x)+0.5-cx)*(Double(x)+0.5-cx)+(Double(y)+0.5-cy)*(Double(y)+0.5-cy)).squareRoot()
+        let cov=max(0,min(1,r-d+0.5)); if cov>0 { s.set(x,y,mix(s.at(x,y),c,a*cov)) } }}
+}
+func sline(_ s: inout Surf,_ x0: Double,_ y0: Double,_ x1: Double,_ y1: Double,_ c: PixelRGB){
+    let n=Int(max(abs(x1-x0),abs(y1-y0)))+1; for i in 0...n { let t=Double(i)/Double(n); sdisc(&s,x0+(x1-x0)*t,y0+(y1-y0)*t,0.8,c) }
+}
+func sgrad(_ s: inout Surf,_ top: PixelRGB,_ bot: PixelRGB){ for y in 0..<64 { let c=mix(top,bot,Double(y)/63); for x in 0..<64 { s.set(x,y,c) } } }
+func miniIcon(_ s: inout Surf,_ cx: Int,_ cy: Int,_ cond: Int,_ day: Bool){
+    let X=Double(cx), Y=Double(cy)
+    func cloud(_ col: PixelRGB){ sdisc(&s,X-3,Y+1,3,col); sdisc(&s,X+3,Y+1,3,col); sdisc(&s,X,Y-1,3.6,col); sdisc(&s,X,Y+2,3,col) }
+    switch cond {
+    case 0: if day { sdisc(&s,X,Y,3.2,PixelRGB(255,210,90)); sdisc(&s,X,Y,2.4,PixelRGB(255,240,170)); for k in 0..<8 { let a=Double(k)*Double.pi/4; sline(&s,X+cos(a)*4,Y+sin(a)*4,X+cos(a)*5.5,Y+sin(a)*5.5,PixelRGB(255,220,110)) } }
+            else { sdisc(&s,X,Y,3.4,PixelRGB(235,240,255)); sdisc(&s,X+1.6,Y-1,3,PixelRGB(20,24,54)) }
+    case 1: if day { sdisc(&s,X-2,Y-2,2.6,PixelRGB(255,225,120)) }; cloud(PixelRGB(225,232,245))
+    case 2: cloud(PixelRGB(200,208,224))
+    case 3: cloud(PixelRGB(205,210,220)); for k in 0..<3 { sline(&s,X-4,Y+4+Double(k)*1.5,X+4,Y+4+Double(k)*1.5,PixelRGB(220,224,232)) }
+    case 4: cloud(PixelRGB(180,190,212)); for k in 0..<3 { let dx=Double(k-1)*3; sline(&s,X+dx,Y+4,X+dx-1,Y+7,PixelRGB(150,195,255)) }
+    case 5: cloud(PixelRGB(215,224,242)); for k in 0..<3 { sdisc(&s,X+Double(k-1)*3,Y+5.5,1.0,PixelRGB(245,250,255)) }
+    default: cloud(PixelRGB(120,126,150)); sline(&s,X,Y+3,X-2,Y+6,PixelRGB(255,230,120)); sline(&s,X-2,Y+6,X+1,Y+8,PixelRGB(255,230,120))
+    }
+}
+func renderHourly(_ hrs: [(Int,Int,Int)]) -> Surf {
+    var s=Surf(); sgrad(&s, PixelRGB(20,26,50), PixelRGB(44,52,86))
+    wtext(&s,"HOURLY",32,2,PixelRGB(150,170,220))
+    let temps=hrs.map{$0.1}; let mn=Double(temps.min()!), mx=Double(temps.max()!); let rng=max(1,mx-mn)
+    let gx0=8.0, gx1=56.0, gtop=24.0, gbot=42.0
+    func px(_ i: Int)->Double{ gx0 + (gx1-gx0)*Double(i)/Double(hrs.count-1) }
+    func py(_ t: Int)->Double{ gbot - (gbot-gtop)*(Double(t)-mn)/rng }
+    for i in 0..<hrs.count-1 { sline(&s, px(i),py(hrs[i].1), px(i+1),py(hrs[i+1].1), PixelRGB(120,200,255)) }
+    for (i,h) in hrs.enumerated() { let x=Int(px(i)), y=Int(py(h.1))
+        sdisc(&s,Double(x),Double(y),1.6,PixelRGB(255,255,255))
+        smallNum(&s, h.1, x-3, y-9, PixelRGB(235,240,255))
+        smallNum(&s, h.0, x-3, 52, PixelRGB(150,160,190)) }
+    return s
+}
+func renderDaily(_ days: [(String,Int,Int,Int)]) -> Surf {
+    var s=Surf(); sgrad(&s, PixelRGB(28,32,56), PixelRGB(48,54,84))
+    for (i,d) in days.enumerated() { let y=4+i*12
+        wtext(&s, d.0, 11, y, PixelRGB(225,230,245))
+        miniIcon(&s, 30, y+3, d.3, true)
+        smallNum(&s, d.1, 40, y, PixelRGB(255,180,120)); smallNum(&s, d.2, 52, y, PixelRGB(150,190,255)) }
+    return s
+}
+func renderDetails(_ feels: Int,_ hum: Int,_ wind: Int,_ uv: Int) -> Surf {
+    var s=Surf(); sgrad(&s, PixelRGB(30,36,60), PixelRGB(50,56,88))
+    func cell(_ lab: String,_ val: String,_ cx: Int,_ cy: Int,_ vc: PixelRGB){ wtext(&s,lab,cx,cy,PixelRGB(150,160,195)); var x=cx-(val.count*4-1)/2; for ch in val { if ch=="%"{x+=4;continue}; if let d=Int(String(ch)){ for (r,row) in SM[d].enumerated(){ for (i,p) in row.enumerated() where p=="#" { s.set(x+i,cy+8+r,vc) } } }; x+=4 } }
+    cell("FEELS", String(feels), 17, 8, PixelRGB(255,255,255))
+    cell("HUM", String(hum), 47, 8, PixelRGB(160,220,255))
+    cell("WIND", String(wind), 17, 38, PixelRGB(200,235,200))
+    cell("UV", String(uv), 47, 38, PixelRGB(255,210,120))
+    return s
+}
+
 // ---- PNG contact sheet ----
 func contactSheet(_ tiles: [Surf],_ cols: Int,_ scale: Int,_ gap: Int,_ path: String){
     let rows=(tiles.count+cols-1)/cols, t=64*scale, W=cols*t+(cols+1)*gap, H=rows*t+(rows+1)*gap
@@ -185,10 +256,11 @@ func contactSheet(_ tiles: [Surf],_ cols: Int,_ scale: Int,_ gap: Int,_ path: St
 }
 
 let out = CommandLine.arguments.count>1 ? CommandLine.arguments[1] : "/tmp/wx.png"
+let hrs=[(15,72,0),(16,73,1),(17,71,1),(18,68,2),(19,64,4),(20,61,4)]
+let days=[("MON",78,61,0),("TUE",75,60,1),("WED",66,58,2),("THU",57,48,4)]
 let tiles=[
     weather(0,true,72,78,61,1.0), weather(0,false,58,72,55,1.0),
-    weather(1,true,69,75,60,1.0), weather(2,true,63,66,58,1.0),
-    weather(3,true,55,58,52,1.0), weather(4,true,52,57,48,2.3),
-    weather(5,false,29,33,24,1.5), weather(6,true,61,70,57,1.7)]
+    weather(4,true,52,57,48,2.3), weather(6,true,61,70,57,1.7),
+    renderHourly(hrs), renderDaily(days), renderDetails(70,65,8,4)]
 contactSheet(tiles, 4, 6, 8, out)
-print("wrote weather scenes to \(out) (clearDay clearNight partlyDay cloudy fog rain snowNight thunder)")
+print("wrote weather pages to \(out) (clearDay clearNight rain thunder | HOURLY DAILY DETAILS)")
