@@ -171,6 +171,12 @@ final class PixooBackend: DisplayBackend {
         ])
     }
 
+    /// Remove any native scrolling-text overlay so a digital-view title doesn't linger over
+    /// the album cover or analog clock. Best-effort (some firmware no-ops it).
+    func clearText() async {
+        try? await post(["Command": "Draw/ClearHttpText"])
+    }
+
     /// Display a static frame, optionally fading through black on the way in and optionally
     /// overlaying native scrolling text. `fade: false` is used for live refreshes (a ticking
     /// clock, a new cover) so only entering a view dips the brightness.

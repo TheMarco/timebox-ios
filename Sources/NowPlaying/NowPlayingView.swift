@@ -46,12 +46,14 @@ struct NowPlayingView: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                Section("Show on the device") {
-                    Toggle("Album art", isOn: $engine.showAlbumArt)
-                    Picker("Clock", selection: $engine.clock) {
+                Section("Clock") {
+                    Picker("Style", selection: $engine.clock) {
                         ForEach(NowPlayingEngine.ClockChoice.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                }
+                Section("Show on the device") {
+                    Toggle("Album art", isOn: $engine.showAlbumArt)
                     Toggle("Spectrum bars on cover", isOn: $engine.spectrumEnabled)
                 }
                 if engine.spectrumEnabled {

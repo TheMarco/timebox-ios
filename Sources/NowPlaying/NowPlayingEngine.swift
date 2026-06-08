@@ -170,7 +170,17 @@ final class NowPlayingEngine: ObservableObject {
     }
 
     private func syncSpectrum() {
-        if running && spectrumActive { spectrum.start() } else { spectrum.stop() }
+        guard running else { spectrum.stop(); return }
+        if spectrumActive {
+            spectrum.start()
+        } else {
+            spectrum.stop()
+            // Explain the common "I enabled it but see no bars" case: it needs the Apple
+            // Music source (Shazam already owns the mic) and the Now Playing display mode.
+            if spectrumEnabled, profile.drivesNatively, displayMode == .nowPlaying, artSource != .appleMusic {
+                status = "Spectrum bars need the Apple Music source (Shazam already uses the mic)"
+            }
+        }
     }
 
     private func setSong(title: String?, artist: String?) {
@@ -178,6 +188,7 @@ final class NowPlayingEngine: ObservableObject {
     }
 
     private func wireSources() {
+        spectrum.onStatus = { [weak self] text in Task { @MainActor in self?.status = text } }
         music.onStatus = { [weak self] text in self?.status = text }
         music.onSong = { [weak self] song in
             guard let self else { return }
@@ -233,6 +244,18 @@ final class NowPlayingEngine: ObservableObject {
     }
 
     private func tickerText() -> String { nowPlaying == "—" ? "" : nowPlaying }
+
+    /// Tint for the natively-scrolled title: the album-art accent lifted toward white
+    /// (matches the look of the old baked ticker).
+    private var tickerColor: PixelRGB {
+        Palette.mix(Palette.vivid(accentColor ?? PixelRGB(red: 90, green: 180, blue: 255)),
+                    PixelRGB(red: 255, green: 255, blue: 255), 0.35)
+    }
+
+    /// Seconds to dwell on the digital view so the firmware's scroll makes ~one pass before
+    /// the loop hands off to the cover; longer titles linger longer. (The firmware loops the
+    /// text on its own — this just paces the transition.)
+    private func nativeTickerDwell(for title: String) -> Double { min(30, max(8, Double(title.count) * 0.45)) }
 
     private func render(_ target: Target, scroll: Int) -> Surface {
         switch target {
@@ -375,6 +398,7 @@ final class NowPlayingEngine: ObservableObject {
             }
 
             if displayMode == .visualizer {          // hand off to the device's own visualizer
+                await pixoo.clearText()
                 try? await pixoo.showVisualizer(style: visualizerStyle)
                 status = "Visualizer"
                 while running && !Task.isCancelled && connection.isConnected && displayMode == .visualizer {
@@ -416,19 +440,23 @@ final class NowPlayingEngine: ObservableObject {
         running && !Task.isCancelled && connection.isConnected && displayMode == .nowPlaying && !restartCycle
     }
 
-    /// Digital: fade in, scroll the "Artist — Title" in from the right exactly once, then
-    /// return so the loop transitions to the album cover. With no title, hold the clock.
+    /// Digital: fade in the hero card (clock over the cover or synthwave) and let the Pixoo's
+    /// own text engine scroll the "Artist — Title" natively in the reserved bottom band —
+    /// full-size device font at 1:1 pixels, far crisper and smoother than streaming a baked
+    /// ticker at ~5 fps. Dwell for roughly one pass, then return so the loop shows the cover.
+    /// With no title, hold the clock.
     private func presentDigital(on pixoo: PixooBackend, multi: Bool) async {
         let title = tickerText()
-        var scroll = 0
+        // Render the hero card WITHOUT a baked title (empty ticker) — the firmware owns the band.
         func frame() -> Surface {
-            DigitalClockRenderer.surface(for: Date(), ticker: title, scroll: scroll,
+            DigitalClockRenderer.surface(for: Date(), ticker: "", scroll: 0,
                                          size: renderSize, tickerScale: profile.tickerScale,
                                          accent: accentColor, art: digitalArt)
         }
-        try? await pixoo.present(frame(), fade: true)   // enter (title starts off the right edge)
 
-        guard !title.isEmpty else {                     // no song: just show the clock
+        guard !title.isEmpty else {                     // no song: just hold the clock
+            await pixoo.clearText()
+            try? await pixoo.present(frame(), fade: true)
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: .seconds(max(4.0, dwellSeconds)))
             var lastMinute = clockMinute()
@@ -440,20 +468,26 @@ final class NowPlayingEngine: ObservableObject {
             return
         }
 
-        let span = tickerSpan(title)
+        // Bottom band is rows [size-16, size); place the native font inside it.
+        let text = PixooBackend.ScrollingText(string: title, color: tickerColor, y: renderSize - 15)
+        try? await pixoo.present(frame(), fade: true, text: text)   // fade in; firmware starts scrolling
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(nativeTickerDwell(for: title)))
+        var lastMinute = clockMinute()
         while nativeLoopAlive {
-            scroll += profile.scrollStep
-            try? await pixoo.present(frame(), fade: false)
-            if scroll >= span {                         // one full pass complete
-                if multi { return }                     // → transition to the cover
-                scroll = 0                              // only the clock showing: loop the ticker
+            if multi && clock.now >= deadline { return }            // → transition to the cover
+            if clockMinute() != lastMinute {                        // refresh the time on a minute roll
+                lastMinute = clockMinute()
+                try? await pixoo.present(frame(), fade: false, text: text)   // re-assert frame + restart scroll
             }
-            try? await Task.sleep(nanoseconds: 30_000_000)
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
     }
 
     /// Analog: fade in, then refresh ~once a second for the dwell.
     private func presentAnalog(on pixoo: PixooBackend, multi: Bool) async {
+        await pixoo.clearText()
         func frame() -> Surface { ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor) }
         try? await pixoo.present(frame(), fade: true)
         let clock = ContinuousClock()
@@ -467,6 +501,7 @@ final class NowPlayingEngine: ObservableObject {
 
     /// Album cover: fade in, then either stream live spectrum bars or hold for the dwell.
     private func presentCover(on pixoo: PixooBackend, multi: Bool) async {
+        await pixoo.clearText()
         try? await pixoo.present(artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize), fade: true)
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(2.0, dwellSeconds)))

@@ -20,6 +20,11 @@ final class MicSpectrum {
     private let lock = NSLock()
     private var _bands: [Float]
     private var running = false
+    private var starting = false   // a permission request / capture start is in flight
+    private var wantsRun = false   // the engine wants us live (cleared by stop())
+
+    /// Surfaces capture problems (denied mic, no input device) to the UI.
+    var onStatus: ((String) -> Void)?
 
     init(bandCount: Int = 16) {
         self.bandCount = bandCount
@@ -38,8 +43,29 @@ final class MicSpectrum {
     var isRunning: Bool { lock.lock(); defer { lock.unlock() }; return running }
 
     func start() {
-        lock.lock(); let already = running; lock.unlock()
-        guard !already else { return }
+        lock.lock()
+        if running || starting { lock.unlock(); return }
+        starting = true; wantsRun = true
+        lock.unlock()
+
+        // The mic needs explicit authorization. With the Apple Music source nothing else has
+        // asked for it, so request here and only begin capturing once it's granted — otherwise
+        // the input format comes back invalid and capture silently produces flat bars.
+        Self.requestRecordPermission { [weak self] granted in
+            guard let self else { return }
+            self.lock.lock(); let wanted = self.wantsRun; self.starting = false; self.lock.unlock()
+            guard wanted else { return }
+            guard granted else {
+                self.onStatus?("Microphone access denied — enable it in Settings ▸ Privacy ▸ Microphone")
+                return
+            }
+            DispatchQueue.main.async { self.beginCapture() }
+        }
+    }
+
+    private func beginCapture() {
+        lock.lock(); let wanted = wantsRun, already = running; lock.unlock()
+        guard wanted, !already else { return }
 
         let session = AVAudioSession.sharedInstance()
         // Coexist with Apple Music: mix rather than interrupt; capture from the mic.
@@ -49,7 +75,10 @@ final class MicSpectrum {
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { return }
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            onStatus?("No microphone input available")
+            return
+        }
         input.installTap(onBus: 0, bufferSize: UInt32(fftSize), format: format) { [weak self] buf, _ in
             self?.process(buf)
         }
@@ -59,11 +88,20 @@ final class MicSpectrum {
             lock.lock(); running = true; lock.unlock()
         } catch {
             input.removeTap(onBus: 0)
+            onStatus?("Couldn't start the microphone: \(error.localizedDescription)")
+        }
+    }
+
+    private static func requestRecordPermission(_ completion: @escaping (Bool) -> Void) {
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission(completionHandler: completion)
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission(completion)
         }
     }
 
     func stop() {
-        lock.lock(); let was = running; running = false
+        lock.lock(); let was = running; running = false; wantsRun = false
         _bands = [Float](repeating: 0, count: bandCount); lock.unlock()
         guard was else { return }
         engine.inputNode.removeTap(onBus: 0)
