@@ -165,26 +165,26 @@ enum DigitalClockRenderer {
         return PixelFont.columns(for: trimmed).count * max(1, tickerScale) + size
     }
 
-    /// "PM" or "AM" (whichever is active) in the top-right corner, on a dark chip so it reads
-    /// over the background — pixel font, accent-tinted toward white.
+    /// "PM" or "AM" (whichever is active) in the top-right corner — just the white letters, no
+    /// backing — in the exact 4px pixel forms traced from the supplied reference image.
     private static func amPmIndicator(into s: inout Surface, isPM: Bool, accent: PixelRGB) {
-        let cols = PixelFont.columns(for: isPM ? "PM" : "AM", tracking: 1)
-        let h = PixelFont.height
-        let w = cols.count
+        let p = ["##.", "#.#", "##.", "#.."]
+        let m = [".#.#.", "#.#.#", "#...#", "#...#"]
+        let a = [".#.", "#.#", "###", "#.#"]
+        let glyphs = isPM ? [p, m] : [a, m]
+        let gap = 1
+        let w = glyphs.reduce(0) { $0 + $1[0].count } + gap * (glyphs.count - 1)
         let x0 = s.width - w - 2, y0 = 2
-        for yy in (y0 - 1)...(y0 + h) {                      // dark chip behind the glyphs
-            for xx in (x0 - 1)...(x0 + w) where xx >= 0 && xx < s.width && yy >= 0 && yy < s.height {
-                s.set(xx, yy, Palette.darken(s.at(xx, yy), 0.16))
+        let ink = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), accent, 0.15)
+        var x = x0
+        for g in glyphs {
+            for (ry, rowStr) in g.enumerated() {
+                for (cx, ch) in rowStr.enumerated() where ch == "#" {
+                    let px = x + cx, py = y0 + ry
+                    if px >= 0, px < s.width, py >= 0, py < s.height { s.set(px, py, ink) }
+                }
             }
-        }
-        let lit = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), accent, 0.15)
-        for (i, col) in cols.enumerated() {
-            let x = x0 + i
-            if x < 0 || x >= s.width { continue }
-            for gy in 0..<h where col[gy] {
-                let py = y0 + gy
-                if py >= 0, py < s.height { s.set(x, py, lit) }
-            }
+            x += g[0].count + gap
         }
     }
 
