@@ -176,10 +176,10 @@ private func faceArcs(_ d: Date) -> Surface {
     return s
 }
 
-// 11. Color clock — fill with #HHMMSS (24h time as a hex color), the hex shown as text.
+// 11. Hex clock — fill with #HHMMSS (24h time as a hex color), the hex shown as text.
 private func hexNibble2(_ v: Int) -> Int { (v/10)*16 + (v%10) }
 private let HASH3 = ["#.#","###","#.#","###","#.#"]
-private func faceColor(_ d: Date) -> Surface {
+private func faceHex(_ d: Date) -> Surface {
     let (h,m,sec) = hms(d)
     let col = PixelRGB(hexNibble2(h), hexNibble2(m), hexNibble2(sec))
     var s = Surface(width: 64, height: 64, fill: col)
@@ -192,17 +192,31 @@ private func faceColor(_ d: Date) -> Surface {
     return s
 }
 
+// 12. Color clock — the 1991 "Color Clock": a circular HSV disc with hue=hour, saturation=
+// minute, brightness=second (12h). No digits — you read the time as the color itself.
+private func faceColorClock(_ d: Date) -> Surface {
+    let (h,m,sec) = hms(d)
+    let hue = (Double(h % 12) + Double(m)/60) / 12
+    let sat = (Double(m) + Double(sec)/60) / 60
+    let val = Double(sec) / 60
+    let col = hsv(hue, sat, val)
+    var s = Surface(width: 64, height: 64, fill: PixelRGB(0, 0, 0))
+    let cx = 31.5, cy = 31.5, r = 31.0
+    for y in 0..<64 { for x in 0..<64 { let dx = Double(x)-cx, dy = Double(y)-cy; if dx*dx+dy*dy <= r*r { s.set(x, y, col) } } }
+    return s
+}
+
 // MARK: - Face catalog
 
 enum ClockFace: String, CaseIterable, Identifiable {
-    case lcd, analog, flip, binary, word, rainbow, pong, neon, matrix, arcs, color
+    case lcd, analog, flip, binary, word, rainbow, pong, neon, matrix, arcs, hex, color
     var id: String { rawValue }
     var name: String {
         switch self {
         case .lcd: return "LCD";       case .analog: return "Analog"; case .flip: return "Flip"
         case .binary: return "Binary"; case .word: return "Words";    case .rainbow: return "Rainbow"
         case .pong: return "Pong";     case .neon: return "Neon";     case .matrix: return "Matrix"
-        case .arcs: return "Rings";    case .color: return "Color"
+        case .arcs: return "Rings";    case .hex: return "Hex";       case .color: return "Color"
         }
     }
     /// Render at the device size. Faces are built for 64×64; smaller panels get the rich analog.
@@ -219,7 +233,8 @@ enum ClockFace: String, CaseIterable, Identifiable {
         case .neon: return faceNeon(date)
         case .matrix: return faceMatrix(date)
         case .arcs: return faceArcs(date)
-        case .color: return faceColor(date)
+        case .hex: return faceHex(date)
+        case .color: return faceColorClock(date)
         }
     }
 }

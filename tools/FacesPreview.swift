@@ -273,6 +273,19 @@ func faceColor(_ d: Date) -> Surface {
     return s
 }
 
+// 12. Color clock — circular HSV disc: hue=hour, saturation=minute, brightness=second (12h).
+func faceColorClock(_ d: Date) -> Surface {
+    let (h,m,sec) = hms(d)
+    let hue = (Double(h%12) + Double(m)/60) / 12
+    let sat = (Double(m) + Double(sec)/60) / 60
+    let val = Double(sec) / 60
+    let col = hsv(hue, sat, val)
+    var s = Surface(width:64,height:64, fill: PixelRGB(0,0,0))
+    let cx=31.5, cy=31.5, r=31.0
+    for y in 0..<64 { for x in 0..<64 { let dx=Double(x)-cx, dy=Double(y)-cy; if dx*dx+dy*dy<=r*r { s.set(x,y,col) } } }
+    return s
+}
+
 // MARK: - Contact sheet
 
 func contactSheet(_ tiles: [Surface], cols: Int, scale: Int, gap: Int, to path: String) {
@@ -294,6 +307,6 @@ func contactSheet(_ tiles: [Surface], cols: Int, scale: Int, gap: Int, to path: 
 let out = CommandLine.arguments.count>1 ? CommandLine.arguments[1] : "/tmp/faces.png"
 func date(_ h:Int,_ m:Int,_ s:Int)->Date{ var c=DateComponents(); c.year=2026;c.month=6;c.day=7;c.hour=h;c.minute=m;c.second=s; return cal.date(from:c)! }
 let t = date(10,9,36)
-let tiles=[faceLCD(t),faceAnalog(t),faceFlip(t),faceBinary(t),faceWord(t),faceRainbow(t),facePong(t),faceNeon(t),faceMatrix(t),faceArcs(t),faceColor(t)]
+let tiles=[faceLCD(t),faceAnalog(t),faceFlip(t),faceBinary(t),faceWord(t),faceRainbow(t),facePong(t),faceNeon(t),faceMatrix(t),faceArcs(t),faceColor(t),faceColorClock(t)]
 contactSheet(tiles, cols: 4, scale: 6, gap: 8, to: out)
-print("wrote \(tiles.count) faces to \(out)  (order: LCD Analog Flip Binary Word Rainbow Pong Neon Matrix Arcs Color)")
+print("wrote \(tiles.count) faces to \(out)  (order: LCD Analog Flip Binary Word Rainbow Pong Neon Matrix Arcs Hex Color)")
