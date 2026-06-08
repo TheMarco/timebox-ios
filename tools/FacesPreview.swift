@@ -88,9 +88,9 @@ let LET: [Character:[String]] = [
  "O":[".##.","#..#","#..#","#..#",".##."],"P":["###.","#..#","###.","#...","#..."],"Q":["####","#..#","#..#","####","..##"],
  "R":["###.","#..#","###.","#.#.","#..#"],"S":[".###","#...",".##.","...#","###."],"T":["#####","..#..","..#..","..#..","..#.."],
  "U":["#..#","#..#","#..#","#..#",".##."],"V":["#...#","#...#",".#.#.",".#.#.","..#.."],"W":["#...#","#...#","#.#.#","#.#.#",".#.#."],
- "M":["#...#","##.##","#.#.#","#...#","#...#"],
+ "M":["#...#","##.##","#.#.#","#...#","#...#"],"K":["#..#","#.#.","##..","#.#.","#..#"],"Z":["####","...#",".##.","#...","####"],
  "X":["#..#","#..#",".##.","#..#","#..#"],"Y":["#..#","#..#",".##.","..#.","..#."],"'":["#","#",".",".","."]]
-func letW(_ ch: Character) -> Int { (LET[ch]?.first?.count ?? 4) }
+func letW(_ ch: Character) -> Int { ch == " " ? 2 : (LET[ch]?.first?.count ?? 4) }
 func text5(_ s: inout Surface, _ str: String, _ cx: Int, _ y: Int, _ c: PixelRGB) {
     let w = str.reduce(0){ $0 + letW($1) + 1 } - 1
     var x = cx - w/2
@@ -168,15 +168,19 @@ func faceBinary(_ d: Date) -> Surface {
 }
 
 // 5. Word clock — minute phrase / PAST|TO / hour, centered.
-let WORDS=["TWELVE","ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN","ELEVEN","TWELVE"]
-let MINS=["O'CLOCK","FIVE","TEN","QUARTER","TWENTY","TWENTY FIVE","HALF"]
+let numOnes=["ZERO","ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN","ELEVEN","TWELVE","THIRTEEN","FOURTEEN","FIFTEEN","SIXTEEN","SEVENTEEN","EIGHTEEN","NINETEEN"]
+let numTens=["","","TWENTY","THIRTY","FORTY","FIFTY"]
+func numWords(_ n: Int) -> String { n<20 ? numOnes[n] : (n%10==0 ? numTens[n/10] : numTens[n/10]+" "+numOnes[n%10]) }
 func faceWord(_ d: Date) -> Surface {
-    var s = bg(PixelRGB(10,6,16))
-    let (h0,m,_)=hms(d); let r=(m+2)/5*5
-    let acc=PixelRGB(255,170,90)
-    if r==0 || r==60 { let hr=h12(r==60 ? h0+1 : h0); text5(&s,WORDS[hr],32,18,acc); text5(&s,"O'CLOCK",32,30,acc) }
-    else { let idx = r<=30 ? r/5 : (60-r)/5; let conn = r<=30 ? "PAST":"TO"; let hr=h12(r<=30 ? h0 : h0+1)
-        text5(&s,MINS[idx],32,12,acc); text5(&s,conn,32,26,mix(acc,PixelRGB(255,255,255),0.3)); text5(&s,WORDS[hr],32,40,acc) }
+    var s = bg(PixelRGB(10,6,16)); let (h0,m,sec)=hms(d)
+    let acc=PixelRGB(255,170,90), conn=mix(acc,PixelRGB(255,255,255),0.3), secCol=PixelRGB(150,160,190)
+    var lines: [(String,PixelRGB)]
+    if m==0 { lines=[(numWords(h12(h0)),acc),("O'CLOCK",acc)] }
+    else if m<=30 { lines=[(numWords(m),acc),("PAST",conn),(numWords(h12(h0)),acc)] }
+    else { lines=[(numWords(60-m),acc),("TO",conn),(numWords(h12(h0+1)),acc)] }
+    lines.append((numWords(sec),secCol))
+    let lh=8, total=lines.count*lh-(lh-5); var y=(64-total)/2
+    for (str,col) in lines { text5(&s,str,32,y,col); y+=lh }
     return s
 }
 
@@ -314,6 +318,41 @@ func faceColorClock(_ d: Date) -> Surface {
     return s
 }
 
+// 13. Ruler — three number lines (hours, minutes, seconds) with a red playhead on each.
+func faceRuler(_ d: Date) -> Surface {
+    var s = bg(PixelRGB(6,7,12))
+    let (h0,m,sec) = hms(d); let h = h12(h0)
+    let left = 4.0, right = 59.0, span = right-left
+    let dim = PixelRGB(110,120,150), bright = PixelRGB(235,240,255), red = PixelRGB(255,45,45), axis = PixelRGB(46,52,74)
+    func numAt(_ v: Int, _ cx: Int, _ y: Int, _ col: PixelRGB) {
+        let str = String(v); let w = str.count*4 - 1; var x = cx - w/2
+        for ch in str { d3(&s, x, y, Int(String(ch))!, col); x += 4 }
+    }
+    func axisLine(_ y: Int) { for x in Int(left)...Int(right) { s.set(x, y, axis) } }
+    func tick(_ x: Int, _ y: Int, _ len: Int, _ c: PixelRGB) { for yy in y..<(y+len) { s.set(x, yy, c) } }
+    func playhead(_ x: Int, _ y0: Int, _ y1: Int) { for y in y0...y1 { s.set(x, y, red) }; s.set(x-1, y0, red); s.set(x+1, y0, red) }
+    func posX(_ frac: Double) -> Int { Int((left + frac*span).rounded()) }
+
+    // Hours
+    let ay1 = 9
+    for hh in 1...12 { numAt(hh, posX(Double(hh-1)/11), 2, hh==h ? bright : dim) }
+    axisLine(ay1); for hh in 1...12 { tick(posX(Double(hh-1)/11), ay1+1, 2, dim) }
+    playhead(posX(Double(h-1)/11), 1, ay1+3)
+
+    // Minutes
+    let ay2 = 31
+    for lab in [0,15,30,45,60] { numAt(lab, posX(Double(lab)/60), 24, dim) }
+    axisLine(ay2); for t in stride(from:0,through:60,by:5) { tick(posX(Double(t)/60), ay2+1, t%15==0 ? 3:2, dim) }
+    playhead(posX((Double(m)+Double(sec)/60)/60), 23, ay2+3)
+
+    // Seconds
+    let ay3 = 53
+    for lab in [0,15,30,45,60] { numAt(lab, posX(Double(lab)/60), 46, dim) }
+    axisLine(ay3); for t in stride(from:0,through:60,by:5) { tick(posX(Double(t)/60), ay3+1, t%15==0 ? 3:2, dim) }
+    playhead(posX(Double(sec)/60), 45, ay3+3)
+    return s
+}
+
 // MARK: - Contact sheet
 
 func contactSheet(_ tiles: [Surface], cols: Int, scale: Int, gap: Int, to path: String) {
@@ -341,3 +380,7 @@ print("wrote \(tiles.count) faces to \(out)  (order: LCD Analog Flip Binary Word
 let cct=[date(0,5,10),date(2,40,30),date(5,55,0),date(8,12,45),date(11,30,20),date(15,48,50),date(19,25,5),date(23,59,55)]
 contactSheet(cct.map{faceColorClock($0)}, cols: 4, scale: 7, gap: 8, to: "/tmp/colorclock.png")
 print("wrote color-clock strip to /tmp/colorclock.png (00:05 02:40 05:55 08:12 11:30 15:48 19:25 23:59)")
+contactSheet([faceRuler(date(10,9,36)),faceRuler(date(3,47,52)),faceRuler(date(11,59,1))], cols: 3, scale: 9, gap: 8, to: "/tmp/ruler.png")
+print("wrote ruler to /tmp/ruler.png (10:09:36 03:47:52 11:59:01)")
+contactSheet([faceWord(date(10,9,36)),faceWord(date(10,23,47)),faceWord(date(10,47,5)),faceWord(date(10,0,21)),faceWord(date(2,30,0)),faceWord(date(11,58,59))], cols: 6, scale: 7, gap: 8, to: "/tmp/word.png")
+print("wrote word strip to /tmp/word.png (10:09:36 10:23:47 10:47:05 10:00:21 02:30:00 11:58:59)")

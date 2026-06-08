@@ -72,9 +72,9 @@ private let LET: [Character:[String]] = [
  "O":[".##.","#..#","#..#","#..#",".##."],"P":["###.","#..#","###.","#...","#..."],"Q":["####","#..#","#..#","####","..##"],
  "R":["###.","#..#","###.","#.#.","#..#"],"S":[".###","#...",".##.","...#","###."],"T":["#####","..#..","..#..","..#..","..#.."],
  "U":["#..#","#..#","#..#","#..#",".##."],"V":["#...#","#...#",".#.#.",".#.#.","..#.."],"W":["#...#","#...#","#.#.#","#.#.#",".#.#."],
- "M":["#...#","##.##","#.#.#","#...#","#...#"],
+ "M":["#...#","##.##","#.#.#","#...#","#...#"],"K":["#..#","#.#.","##..","#.#.","#..#"],"Z":["####","...#",".##.","#...","####"],
  "X":["#..#","#..#",".##.","#..#","#..#"],"Y":["#..#","#..#",".##.","..#.","..#."],"'":["#","#",".",".","."]]
-private func letW(_ ch: Character) -> Int { LET[ch]?.first?.count ?? 4 }
+private func letW(_ ch: Character) -> Int { ch == " " ? 2 : (LET[ch]?.first?.count ?? 4) }
 private func text5(_ s: inout Surface, _ str: String, _ cx: Int, _ y: Int, _ c: PixelRGB) {
     let w = str.reduce(0) { $0 + letW($1) + 1 } - 1
     var x = cx - w/2
@@ -113,15 +113,48 @@ private func faceBinary(_ d: Date) -> Surface {
     }
     return s
 }
-private let WORDS = ["TWELVE","ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN","ELEVEN","TWELVE"]
-private let MINS = ["O'CLOCK","FIVE","TEN","QUARTER","TWENTY","TWENTY FIVE","HALF"]
+private let numOnes = ["ZERO","ONE","TWO","THREE","FOUR","FIVE","SIX","SEVEN","EIGHT","NINE","TEN","ELEVEN","TWELVE","THIRTEEN","FOURTEEN","FIFTEEN","SIXTEEN","SEVENTEEN","EIGHTEEN","NINETEEN"]
+private let numTens = ["","","TWENTY","THIRTY","FORTY","FIFTY"]
+private func numWords(_ n: Int) -> String { n < 20 ? numOnes[n] : (n%10==0 ? numTens[n/10] : numTens[n/10]+" "+numOnes[n%10]) }
+// Word clock — every minute as words (e.g. "TWENTY THREE PAST TEN"), with a 4th line counting
+// the seconds ("ZERO" … "FIFTY NINE").
 private func faceWord(_ d: Date) -> Surface {
-    var s = bg(PixelRGB(10,6,16)); let (h0,m,_)=hms(d); let r=(m+2)/5*5; let acc=PixelRGB(255,170,90)
-    if r==0 || r==60 { let hr=h12(r==60 ? h0+1 : h0); text5(&s,WORDS[hr],32,18,acc); text5(&s,"O'CLOCK",32,30,acc) }
-    else {
-        let idx = r<=30 ? r/5 : (60-r)/5; let conn = r<=30 ? "PAST" : "TO"; let hr = h12(r<=30 ? h0 : h0+1)
-        text5(&s,MINS[idx],32,12,acc); text5(&s,conn,32,26,Palette.mix(acc,PixelRGB(255,255,255),0.3)); text5(&s,WORDS[hr],32,40,acc)
+    var s = bg(PixelRGB(10,6,16)); let (h0,m,sec)=hms(d)
+    let acc=PixelRGB(255,170,90), conn=Palette.mix(acc,PixelRGB(255,255,255),0.3), secCol=PixelRGB(150,160,190)
+    var lines: [(String,PixelRGB)]
+    if m==0 { lines=[(numWords(h12(h0)),acc),("O'CLOCK",acc)] }
+    else if m<=30 { lines=[(numWords(m),acc),("PAST",conn),(numWords(h12(h0)),acc)] }
+    else { lines=[(numWords(60-m),acc),("TO",conn),(numWords(h12(h0+1)),acc)] }
+    lines.append((numWords(sec),secCol))
+    let lh=8, total=lines.count*lh-(lh-5); var y=(64-total)/2
+    for (str,col) in lines { text5(&s,str,32,y,col); y+=lh }
+    return s
+}
+// Ruler — three number lines (hours, minutes, seconds) with a red playhead on each.
+private func faceRuler(_ d: Date) -> Surface {
+    var s = bg(PixelRGB(6,7,12)); let (h0,m,sec)=hms(d); let h=h12(h0)
+    let left=4.0, right=59.0, span=right-left
+    let dim=PixelRGB(110,120,150), bright=PixelRGB(235,240,255), red=PixelRGB(255,45,45), axis=PixelRGB(46,52,74)
+    func numAt(_ v: Int, _ cx: Int, _ y: Int, _ col: PixelRGB) {
+        let str=String(v); let w=str.count*4 - 1; var x=cx - w/2
+        for ch in str { d3(&s, x, y, Int(String(ch))!, col); x+=4 }
     }
+    func axisLine(_ y: Int) { for x in Int(left)...Int(right) { s.set(x,y,axis) } }
+    func tick(_ x: Int, _ y: Int, _ len: Int, _ c: PixelRGB) { for yy in y..<(y+len) { s.set(x,yy,c) } }
+    func playhead(_ x: Int, _ y0: Int, _ y1: Int) { for y in y0...y1 { s.set(x,y,red) }; s.set(x-1,y0,red); s.set(x+1,y0,red) }
+    func posX(_ frac: Double) -> Int { Int((left+frac*span).rounded()) }
+    let ay1=9
+    for hh in 1...12 { numAt(hh, posX(Double(hh-1)/11), 2, hh==h ? bright : dim) }
+    axisLine(ay1); for hh in 1...12 { tick(posX(Double(hh-1)/11), ay1+1, 2, dim) }
+    playhead(posX(Double(h-1)/11), 1, ay1+3)
+    let ay2=31
+    for lab in [0,15,30,45,60] { numAt(lab, posX(Double(lab)/60), 24, dim) }
+    axisLine(ay2); for t in stride(from:0,through:60,by:5) { tick(posX(Double(t)/60), ay2+1, t%15==0 ? 3:2, dim) }
+    playhead(posX((Double(m)+Double(sec)/60)/60), 23, ay2+3)
+    let ay3=53
+    for lab in [0,15,30,45,60] { numAt(lab, posX(Double(lab)/60), 46, dim) }
+    axisLine(ay3); for t in stride(from:0,through:60,by:5) { tick(posX(Double(t)/60), ay3+1, t%15==0 ? 3:2, dim) }
+    playhead(posX(Double(sec)/60), 45, ay3+3)
     return s
 }
 private func faceRainbow(_ d: Date) -> Surface {
@@ -236,7 +269,7 @@ private func faceColorClock(_ d: Date) -> Surface {
 // MARK: - Face catalog
 
 enum ClockFace: String, CaseIterable, Identifiable {
-    case lcd, analog, flip, binary, word, rainbow, pong, neon, matrix, arcs, hex, color
+    case lcd, analog, flip, binary, word, rainbow, pong, neon, matrix, arcs, hex, color, ruler
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -244,6 +277,7 @@ enum ClockFace: String, CaseIterable, Identifiable {
         case .binary: return "Binary"; case .word: return "Words";    case .rainbow: return "Rainbow"
         case .pong: return "Pong";     case .neon: return "Neon";     case .matrix: return "Matrix"
         case .arcs: return "Rings";    case .hex: return "Hex";       case .color: return "Color"
+        case .ruler: return "Ruler"
         }
     }
     /// Render at the device size. Faces are built for 64×64; smaller panels get the rich analog.
@@ -262,6 +296,7 @@ enum ClockFace: String, CaseIterable, Identifiable {
         case .arcs: return faceArcs(date)
         case .hex: return faceHex(date)
         case .color: return faceColorClock(date)
+        case .ruler: return faceRuler(date)
         }
     }
 }
