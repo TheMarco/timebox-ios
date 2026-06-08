@@ -11,10 +11,10 @@ import TimeboxKit
 ///   tint, a fixed warm second hand, and a center hub.
 enum ClockRenderer {
     static func surface(for date: Date, size: Int, accent: PixelRGB? = nil,
-                        calendar: Calendar = .current) -> Surface {
+                        art: Surface? = nil, calendar: Calendar = .current) -> Surface {
         size <= 16
             ? small(for: date, size: size, calendar: calendar)
-            : large(for: date, size: size, accent: accent, calendar: calendar)
+            : large(for: date, size: size, accent: accent, art: art, calendar: calendar)
     }
 
     // MARK: - 16×16 (original Timebox design)
@@ -108,7 +108,7 @@ enum ClockRenderer {
 
     // MARK: - 64×64 (rich Pixoo design)
 
-    private static func large(for date: Date, size: Int, accent: PixelRGB?, calendar: Calendar) -> Surface {
+    private static func large(for date: Date, size: Int, accent: PixelRGB?, art: Surface?, calendar: Calendar) -> Surface {
         let ss = 8
         let dim = size * ss
         guard let ctx = CGContext(data: nil, width: dim, height: dim, bitsPerComponent: 8,
@@ -221,7 +221,32 @@ enum ClockRenderer {
         ctx.fillEllipse(in: CGRect(x: cx - 0.9, y: cy - 0.9, width: 1.8, height: 1.8))
 
         guard let img = ctx.makeImage() else { return Surface(width: size, height: size) }
-        return downsampleSmooth(img, to: size)
+        let clock = downsampleSmooth(img, to: size)
+        guard let art, art.width == size, art.height == size else { return clock }
+        return compositeArt(clock: clock, art: art)
+    }
+
+    /// Composite the analog clock over the album art (darkened + vignetted), like the digital
+    /// hero card: bright clock elements (ticks, hands, hub, bezel) stay; the dark face reveals
+    /// the cover behind them.
+    private static func compositeArt(clock: Surface, art: Surface) -> Surface {
+        let size = clock.width
+        let cx = Double(size) / 2, cy = Double(size) / 2, maxd = Double(size) / 2 * 1.18
+        var px = [PixelRGB](); px.reserveCapacity(size * size)
+        for y in 0..<size { for x in 0..<size {
+            var bg = Palette.darken(art.at(x, y), 0.38)                       // dim the cover
+            let d = (((Double(x) - cx) * (Double(x) - cx) + (Double(y) - cy) * (Double(y) - cy)).squareRoot()) / maxd
+            bg = Palette.darken(bg, 1 - min(0.55, d * 0.55))                  // radial vignette
+            let c = clock.at(x, y)
+            let lum = (Double(c.red) + Double(c.green) + Double(c.blue)) / (3 * 255)
+            let a = smoothstep(0.10, 0.30, lum)                              // bright = clock, dark = cover
+            px.append(Palette.mix(bg, c, a))
+        }}
+        return Surface(width: size, height: size, pixels: px) ?? clock
+    }
+
+    private static func smoothstep(_ e0: Double, _ e1: Double, _ x: Double) -> Double {
+        let t = max(0, min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t)
     }
 
     /// Downsample preserving smooth gradients/AA, with a gentle LED lift on dim pixels.

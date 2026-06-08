@@ -344,22 +344,49 @@ final class NowPlayingEngine: ObservableObject {
 
     private func clockMinute() -> Int { Calendar.current.component(.minute, from: Date()) }
 
+    /// The last full frame pushed to the Pixoo, so a view change can animate a transition from
+    /// it instead of a plain brightness fade.
+    private var lastShown: Surface?
+
+    /// Enter a view: a flashy frame-based transition from whatever's on screen (random style),
+    /// or a brightness fade when we don't know the outgoing frame.
+    private func enter(_ pixoo: PixooBackend, _ frame: Surface) async {
+        if let from = lastShown, from.width == frame.width, from.height == frame.height {
+            let accent = Palette.vivid(accentColor ?? PixelRGB(red: 90, green: 180, blue: 255))
+            for f in Blend.transition(from: from, to: frame, steps: 7, accent: accent) {
+                try? await pixoo.present(f, fade: false)
+            }
+        } else {
+            try? await pixoo.present(frame, fade: true)
+        }
+        lastShown = frame
+    }
+
+    /// Push a live-refresh frame (no transition) and remember it as the last shown.
+    private func show(_ pixoo: PixooBackend, _ frame: Surface) async {
+        try? await pixoo.present(frame, fade: false)
+        lastShown = frame
+    }
+
     /// The Pixoo can't stream frames smoothly, so each view fades in through black, then the
     /// loop refreshes only live content. The digital view scrolls its title with the device's
     /// own text engine, then advances to the cover.
     private func runNativeLoop() async {
         guard let pixoo = connection.backend as? PixooBackend else { return }
         await pixoo.clearText()   // wipe any stale native scrolling text from a prior session
+        lastShown = nil
 
         while running && !Task.isCancelled {
             if !connection.isConnected {
                 status = "Reconnecting…"
+                lastShown = nil
                 await connection.attemptReconnect()
                 if !connection.isConnected { try? await Task.sleep(nanoseconds: 2_000_000_000) }
                 continue
             }
 
             if displayMode == .visualizer {          // hand off to the device's own visualizer
+                lastShown = nil                      // device draws its own channel now
                 try? await pixoo.showVisualizer(style: visualizerStyle)
                 status = "Visualizer"
                 while running && !Task.isCancelled && connection.isConnected && displayMode == .visualizer {
@@ -370,7 +397,7 @@ final class NowPlayingEngine: ObservableObject {
 
             let items = targets()
             if items.isEmpty {                       // nothing selected: just show the clock
-                try? await pixoo.present(ClockRenderer.surface(for: Date(), size: renderSize), fade: false)
+                await show(pixoo, ClockRenderer.surface(for: Date(), size: renderSize))
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 continue
             }
@@ -413,14 +440,14 @@ final class NowPlayingEngine: ObservableObject {
                                          size: renderSize, tickerScale: profile.tickerScale,
                                          accent: accentColor, art: digitalArt, progress: playbackProgress())
         }
-        try? await pixoo.present(frame(), fade: true)   // enter: band blank, title off the right edge
+        await enter(pixoo, frame())                     // enter: band blank, title off the right edge
 
         guard !title.isEmpty else {                     // no song: hold the clock, refresh per minute
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: .seconds(max(4.0, dwellSeconds)))
             var lastMinute = clockMinute()
             while nativeLoopAlive {
-                if clockMinute() != lastMinute { lastMinute = clockMinute(); try? await pixoo.present(frame(), fade: false) }
+                if clockMinute() != lastMinute { lastMinute = clockMinute(); await show(pixoo, frame()) }
                 if multi && clock.now >= deadline { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
@@ -430,7 +457,7 @@ final class NowPlayingEngine: ObservableObject {
         let span = tickerSpan(title)
         while nativeLoopAlive {
             scroll += profile.scrollStep
-            try? await pixoo.present(frame(), fade: false)
+            await show(pixoo, frame())
             if scroll >= span {                         // one full pass: title fully off the left → empty
                 if multi { return }                     // → back to the album cover
                 scroll = 0                              // only the clock showing: loop the ticker
@@ -441,12 +468,12 @@ final class NowPlayingEngine: ObservableObject {
 
     /// Analog: fade in, then refresh ~once a second for the dwell.
     private func presentAnalog(on pixoo: PixooBackend, multi: Bool) async {
-        func frame() -> Surface { ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor) }
-        try? await pixoo.present(frame(), fade: true)
+        func frame() -> Surface { ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor, art: digitalArt) }
+        await enter(pixoo, frame())
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(2.0, dwellSeconds)))
         while nativeLoopAlive {
-            try? await pixoo.present(frame(), fade: false)
+            await show(pixoo, frame())
             if multi && clock.now >= deadline { break }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
@@ -457,21 +484,18 @@ final class NowPlayingEngine: ObservableObject {
     private func presentCover(on pixoo: PixooBackend, multi: Bool) async {
         func coverFrame() -> Surface {
             var f = artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize)
-            if let p = playbackProgress() {
-                DigitalClockRenderer.progressBar(into: &f, progress: p,
-                    accent: Palette.vivid(accentColor ?? PixelRGB(red: 90, green: 180, blue: 255)))
-            }
+            if let p = playbackProgress() { DigitalClockRenderer.progressReveal(into: &f, progress: p) }
             return f
         }
-        try? await pixoo.present(coverFrame(), fade: true)
+        await enter(pixoo, coverFrame())
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(2.0, dwellSeconds)))
         var lastArtVersion = artVersion
         while nativeLoopAlive {
-            // Re-send to advance the progress bar, or when a new cover arrives.
+            // Re-send to advance the progress reveal, or when a new cover arrives.
             if playbackProgress() != nil || artVersion != lastArtVersion {
                 lastArtVersion = artVersion
-                try? await pixoo.present(coverFrame(), fade: false)
+                await show(pixoo, coverFrame())
             }
             if multi && clock.now >= deadline { break }
             try? await Task.sleep(nanoseconds: 1_500_000_000)

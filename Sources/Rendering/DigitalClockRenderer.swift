@@ -24,13 +24,23 @@ enum DigitalClockRenderer {
     }
 
     /// A 2px song-progress bar across the very bottom: the elapsed portion in `accent`, the
-    /// rest a dim track. `progress` is 0…1. Shared by the digital view and the album cover.
+    /// rest a dim track. `progress` is 0…1. Used by the digital clock view.
     static func progressBar(into s: inout Surface, progress: Double, accent: PixelRGB) {
         let p = max(0, min(1, progress))
         let fillW = Int((Double(s.width) * p).rounded())
         let track = Palette.darken(accent, 0.22)
         for y in (s.height - 2)..<s.height {
             for x in 0..<s.width { s.set(x, y, x < fillW ? accent : track) }
+        }
+    }
+
+    /// Album-cover progress: the bottom 2 rows ARE the cover's own pixels, revealed left→right
+    /// as the song plays (the unfilled remainder is blacked out). `progress` is 0…1.
+    static func progressReveal(into s: inout Surface, progress: Double) {
+        let p = max(0, min(1, progress))
+        let fillW = Int((Double(s.width) * p).rounded())
+        for y in (s.height - 2)..<s.height {
+            for x in fillW..<s.width { s.set(x, y, PixelRGB(red: 0, green: 0, blue: 0)) }
         }
     }
 
