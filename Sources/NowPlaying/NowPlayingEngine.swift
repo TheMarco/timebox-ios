@@ -352,8 +352,7 @@ final class NowPlayingEngine: ObservableObject {
     /// or a brightness fade when we don't know the outgoing frame.
     private func enter(_ pixoo: PixooBackend, _ frame: Surface) async {
         if let from = lastShown, from.width == frame.width, from.height == frame.height {
-            let accent = Palette.vivid(accentColor ?? PixelRGB(red: 90, green: 180, blue: 255))
-            for f in Blend.transition(from: from, to: frame, steps: 7, accent: accent) {
+            for f in Blend.transition(from: from, to: frame, steps: 8) {
                 try? await pixoo.present(f, fade: false)
             }
         } else {

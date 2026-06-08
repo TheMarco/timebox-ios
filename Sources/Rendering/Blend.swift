@@ -1,7 +1,7 @@
 import Foundation
 import TimeboxKit
 
-/// Linear crossfade between two equally-sized surfaces.
+/// Crossfade and a mosaic transition between two equally-sized surfaces.
 enum Blend {
     /// `steps` intermediate surfaces from `a` toward `b`, ending exactly on `b`.
     /// If the two differ in size, returns `[b]` (nothing sensible to interpolate).
@@ -31,103 +31,51 @@ enum Blend {
         return UInt8(max(0, min(255, value.rounded())))
     }
 
-    // MARK: - Spectacular transitions
+    // MARK: - Mosaic transition
 
-    enum Style: CaseIterable { case dissolve, wipe, slide, iris }
-
-    /// `steps` frames animating `from` → `to` with a flashy effect (random style by default),
-    /// ending exactly on `to`. Falls back to `[to]` on a size mismatch.
-    static func transition(from a: Surface, to b: Surface, steps: Int, accent: PixelRGB,
-                           style: Style = Style.allCases.randomElement() ?? .dissolve) -> [Surface] {
-        guard steps > 0, a.width == b.width, a.height == b.height,
+    /// `steps` frames animating `from` → `to` as a mosaic: `from` dissolves into ever-larger
+    /// blocks, then `to` resolves back from large blocks down to full detail. Ends exactly on
+    /// `to`. Falls back to `[to]` on a size mismatch.
+    static func transition(from a: Surface, to b: Surface, steps: Int) -> [Surface] {
+        guard steps >= 2, a.width == b.width, a.height == b.height,
               a.pixels.count == b.pixels.count else { return [b] }
-        switch style {
-        case .dissolve: return dissolve(a, b, steps, accent)
-        case .wipe:     return wipe(a, b, steps, accent)
-        case .slide:    return slide(a, b, steps)
-        case .iris:     return iris(a, b, steps, accent)
-        }
-    }
-
-    private static func surface(_ w: Int, _ h: Int, _ px: [PixelRGB], _ fallback: Surface) -> Surface {
-        Surface(width: w, height: h, pixels: px) ?? fallback
-    }
-
-    /// Sparkly per-pixel reveal: each pixel flips at its own random moment with a bright flash.
-    private static func dissolve(_ a: Surface, _ b: Surface, _ steps: Int, _ accent: PixelRGB) -> [Surface] {
-        let n = a.pixels.count
-        let thr = (0..<n).map { _ in Double.random(in: 0...1) }
-        let spark = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), Palette.vivid(accent), 0.4)
+        let maxCell = 16
+        let half = steps / 2
         var frames: [Surface] = []
         for s in 1...steps {
             if s == steps { frames.append(b); break }
-            let t = Double(s) / Double(steps)
-            var px = [PixelRGB](); px.reserveCapacity(n)
-            for i in 0..<n {
-                if abs(thr[i] - t) < 0.12 { px.append(spark) }
-                else { px.append(thr[i] < t ? b.pixels[i] : a.pixels[i]) }
+            if s <= half {                                  // pixelate `from`: blocks grow 1→max
+                let cell = max(1, Int((Double(maxCell) * Double(s) / Double(half)).rounded()))
+                frames.append(pixelate(a, cell: cell))
+            } else {                                        // resolve `to`: blocks shrink max→1
+                let frac = Double(s - half - 1) / Double(max(1, steps - half - 1))
+                let cell = max(1, Int((Double(maxCell) * (1 - frac)).rounded()))
+                frames.append(pixelate(b, cell: cell))
             }
-            frames.append(surface(a.width, a.height, px, b))
         }
         return frames
     }
 
-    /// Diagonal wipe with a bright accent leading edge.
-    private static func wipe(_ a: Surface, _ b: Surface, _ steps: Int, _ accent: PixelRGB) -> [Surface] {
-        let w = a.width, h = a.height, band = 7.0
-        let edge = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), Palette.vivid(accent), 0.5)
-        var frames: [Surface] = []
-        for s in 1...steps {
-            if s == steps { frames.append(b); break }
-            let boundary = Double(s) / Double(steps) * (Double(w + h) + band)
-            var px = [PixelRGB](); px.reserveCapacity(w * h)
-            for y in 0..<h { for x in 0..<w {
-                let d = Double(x + y)
-                if d < boundary - band { px.append(b.at(x, y)) }
-                else if d > boundary { px.append(a.at(x, y)) }
-                else { px.append(edge) }
-            }}
-            frames.append(surface(w, h, px, b))
+    /// Average each `cell`×`cell` block into a single color — a mosaic/pixelation of `s`.
+    private static func pixelate(_ s: Surface, cell: Int) -> Surface {
+        guard cell > 1 else { return s }
+        let w = s.width, h = s.height
+        var px = [PixelRGB](repeating: PixelRGB(red: 0, green: 0, blue: 0), count: w * h)
+        var by = 0
+        while by < h {
+            var bx = 0
+            while bx < w {
+                let ey = min(by + cell, h), ex = min(bx + cell, w)
+                var r = 0, g = 0, bl = 0, n = 0
+                for yy in by..<ey { for xx in bx..<ex {
+                    let c = s.at(xx, yy); r += Int(c.red); g += Int(c.green); bl += Int(c.blue); n += 1
+                }}
+                let avg = PixelRGB(red: UInt8(r / n), green: UInt8(g / n), blue: UInt8(bl / n))
+                for yy in by..<ey { for xx in bx..<ex { px[yy * w + xx] = avg } }
+                bx += cell
+            }
+            by += cell
         }
-        return frames
-    }
-
-    /// Push: the old frame slides off the left as the new one comes in from the right.
-    private static func slide(_ a: Surface, _ b: Surface, _ steps: Int) -> [Surface] {
-        let w = a.width, h = a.height
-        var frames: [Surface] = []
-        for s in 1...steps {
-            if s == steps { frames.append(b); break }
-            let off = Int((Double(s) / Double(steps) * Double(w)).rounded())
-            var px = [PixelRGB](); px.reserveCapacity(w * h)
-            for y in 0..<h { for x in 0..<w {
-                px.append(x < w - off ? a.at(x + off, y) : b.at(x - (w - off), y))
-            }}
-            frames.append(surface(w, h, px, b))
-        }
-        return frames
-    }
-
-    /// Iris: the new frame expands from the center behind a bright accent ring.
-    private static func iris(_ a: Surface, _ b: Surface, _ steps: Int, _ accent: PixelRGB) -> [Surface] {
-        let w = a.width, h = a.height
-        let cx = Double(w) / 2, cy = Double(h) / 2, band = 4.0
-        let maxR = (cx * cx + cy * cy).squareRoot()
-        let ring = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), Palette.vivid(accent), 0.5)
-        var frames: [Surface] = []
-        for s in 1...steps {
-            if s == steps { frames.append(b); break }
-            let r = Double(s) / Double(steps) * (maxR + band)
-            var px = [PixelRGB](); px.reserveCapacity(w * h)
-            for y in 0..<h { for x in 0..<w {
-                let dx = Double(x) - cx + 0.5, dy = Double(y) - cy + 0.5
-                let dist = (dx * dx + dy * dy).squareRoot()
-                if dist < r - band { px.append(b.at(x, y)) }
-                else if dist > r { px.append(a.at(x, y)) }
-                else { px.append(ring) }
-            }}
-            frames.append(surface(w, h, px, b))
-        }
-        return frames
+        return Surface(width: w, height: h, pixels: px) ?? s
     }
 }
