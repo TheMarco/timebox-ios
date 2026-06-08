@@ -8,7 +8,7 @@ import TimeboxKit
 /// device-independent `Surface` and each backend adapts it at the send boundary:
 /// the Timebox backend converts a 16×16 surface to a `PixelFrame`; the Pixoo backend
 /// serializes the raw bytes to base64. Reuses the library's `PixelRGB` value type.
-struct Surface: Equatable {
+struct Surface: Equatable, Sendable {
     let width: Int
     let height: Int
     var pixels: [PixelRGB]

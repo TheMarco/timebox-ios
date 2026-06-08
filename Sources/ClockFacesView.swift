@@ -347,7 +347,9 @@ final class ClockDriver: ObservableObject {
             try? await self?.connection.setBrightness(100)
             while let self, !Task.isCancelled {
                 if self.connection.isConnected {
-                    try? await self.connection.send(self.face.render(size: self.connection.profile.width, date: Date()))
+                    let face = self.face, size = self.connection.profile.width, now = Date()
+                    let frame = await Task.detached { face.render(size: size, date: now) }.value   // render off the main thread
+                    try? await self.connection.send(frame)
                 } else {
                     await self.connection.attemptReconnect()
                 }

@@ -204,7 +204,7 @@ extension WeatherRenderer {
     /// Daily: day rows with a mini icon + hi/lo. `days` = (label, hi, lo, cond).
     static func daily(_ days: [(String,Int,Int,Int)]) -> Surface {
         var s=Surface(width:64,height:64); sgradS(&s,PixelRGB(28,32,56),PixelRGB(48,54,84))
-        for (i,d) in days.prefix(4).enumerated() { let y=4+i*12
+        for (i,d) in days.prefix(4).enumerated() { let y=4+i*14
             wtextS(&s,d.0,11,y,PixelRGB(225,230,245)); miniIconS(&s,30,y+3,d.3,true)
             smallNum(&s,d.1,40,y,PixelRGB(255,180,120)); smallNum(&s,d.2,52,y,PixelRGB(150,190,255)) }
         return s
@@ -347,17 +347,41 @@ final class WeatherEngine: ObservableObject {
             if !hasData { try? await Task.sleep(nanoseconds: 300_000_000); continue }
             if let l = lastLocation, Date().timeIntervalSince(lastFetch) > 900 { await fetch(l) }   // refresh ~15 min
             let pages = activePages(); let page = pages[idx % pages.count]; currentPage = page
-            let entry = sized(renderPage(page, phase: Date().timeIntervalSince(start)))
+            let entry = await renderFrame(page, phase: Date().timeIntervalSince(start))
             if let from = last, from.width == entry.width, from.height == entry.height {
-                for f in Blend.transition(from: from, to: entry, steps: 8) { if Task.isCancelled { return }; try? await connection.send(f); last = f }
+                let frames = await Task.detached { Blend.transition(from: from, to: entry, steps: 8) }.value
+                for f in frames { if Task.isCancelled { return }; try? await connection.send(f); last = f }
             } else { try? await connection.send(entry); last = entry }
             let deadline = Date().addingTimeInterval(page == .current ? 8 : 6)
             while Date() < deadline && !Task.isCancelled && connection.isConnected {
-                if page == .current { let f = sized(renderPage(.current, phase: Date().timeIntervalSince(start))); try? await connection.send(f); last = f; try? await Task.sleep(nanoseconds: 90_000_000) }
+                if page == .current { let f = await renderFrame(.current, phase: Date().timeIntervalSince(start)); try? await connection.send(f); last = f; try? await Task.sleep(nanoseconds: 90_000_000) }
                 else { try? await Task.sleep(nanoseconds: 250_000_000) }
             }
             idx += 1
         }
+    }
+
+    /// Render a page off the main actor (the supersampled scene is heavy), then size it. Keeps
+    /// the main thread free so navigation stays responsive.
+    private func renderFrame(_ page: Page, phase: Double) async -> Surface {
+        func disp(_ c: Double) -> Int { Int((useCelsius ? c : c*9/5+32).rounded()) }
+        let size = connection.profile.width
+        let s: Surface
+        switch page {
+        case .current:
+            let (c,d,t,h,lo) = (cond, isDay, disp(tempC), disp(hiC), disp(loC))
+            s = await Task.detached { WeatherRenderer.surface(cond: c, isDay: d, temp: t, hi: h, lo: lo, phase: phase) }.value
+        case .hourly:
+            let hrs = hourlyC.map { ($0.0, disp($0.1), $0.2) }
+            s = await Task.detached { WeatherRenderer.hourly(hrs) }.value
+        case .daily:
+            let dys = dailyC.map { ($0.0, disp($0.1), disp($0.2), $0.3) }
+            s = await Task.detached { WeatherRenderer.daily(dys) }.value
+        case .details:
+            let (f,hu,wi,u) = (disp(feelsC), humidity, Int((useCelsius ? windKph : windKph*0.621371).rounded()), uvIdx)
+            s = await Task.detached { WeatherRenderer.details(f, hu, wi, u) }.value
+        }
+        return size == 64 ? s : shrink(s, to: size)
     }
     private func activePages() -> [Page] {
         var p: [Page] = [.current]
@@ -401,7 +425,7 @@ struct WeatherView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                TimelineView(.periodic(from: Date(), by: 0.1)) { ctx in
+                TimelineView(.periodic(from: Date(), by: 0.5)) { ctx in
                     Group {
                         if engine.hasData {
                             wxImage(engine.renderPage(engine.currentPage, phase: ctx.date.timeIntervalSince1970))
