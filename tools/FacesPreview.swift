@@ -279,28 +279,37 @@ func faceColor(_ d: Date) -> Surface {
 // orbits the ring with the seconds; AM/PM in the carved center. (mask.png overlay omitted.)
 func faceColorClock(_ d: Date) -> Surface {
     let (h0,m,sec) = hms(d)
-    var s = Surface(width:64,height:64, fill: PixelRGB(0,0,0))
-    let cx=31.5, cy=31.5, radius=26.0, hole=radius*0.24, ringMid=radius+3.0, ringHalf=1.5
+    let ss=4, big=64*ss
+    let cx=Double(big)/2, cy=Double(big)/2
+    let radius=26.0*Double(ss), hole=radius*0.24, ringMid=radius+3.0*Double(ss), ringHalf=1.5*Double(ss)
     let colors=[PixelRGB(255,59,48),PixelRGB(255,149,0),PixelRGB(255,204,0)]  // red, orange, yellow (12h)
     let pieceOrder=[3,0,1,2]; let H=h0%12
     var seg=[0,0,0,0]; for t in 0..<H { let p=pieceOrder[t%4]; seg[p]=(seg[p]+1)%colors.count }
     let curPiece=pieceOrder[H%4], progress=Double(m)/60.0, wedge=Double.pi/3, twoPi=Double.pi*2
-    for y in 0..<64 { for x in 0..<64 {
-        let dx=Double(x)+0.5-cx, dy=Double(y)+0.5-cy, dist=(dx*dx+dy*dy).squareRoot()
-        if dist<=hole { continue }
-        if abs(dist-ringMid)<=ringHalf { s.set(x,y,PixelRGB(85,85,85)); continue }
-        if dist>radius { continue }
-        let ang=atan2(dy,dx)
-        for i in 0..<4 {
-            let startA=Double(i)*Double.pi/2 - wedge/2
-            var rel=(ang-startA).truncatingRemainder(dividingBy:twoPi); if rel<0 { rel+=twoPi }
-            if rel<=wedge { let base=colors[seg[i]%colors.count]
-                s.set(x,y, (i==curPiece && rel<=wedge*progress) ? colors[(seg[i]+1)%colors.count] : base); break }
+    let secAng=twoPi*Double(sec)/60 - Double.pi/2
+    let sdx=cx+ringMid*cos(secAng), sdy=cy+ringMid*sin(secAng), sdr=1.4*Double(ss)
+    var acc=[Double](repeating:0,count:64*64*3)
+    for by in 0..<big { for bx in 0..<big {
+        let dxp=Double(bx)+0.5-cx, dyp=Double(by)+0.5-cy, dist=(dxp*dxp+dyp*dyp).squareRoot()
+        var c: PixelRGB? = nil
+        let ddx=Double(bx)+0.5-sdx, ddy=Double(by)+0.5-sdy
+        if ddx*ddx+ddy*ddy<=sdr*sdr { c=PixelRGB(255,255,255) }
+        else if dist<=hole { c=nil }
+        else if abs(dist-ringMid)<=ringHalf { c=PixelRGB(85,85,85) }
+        else if dist<=radius {
+            let ang=atan2(dyp,dxp)
+            for i in 0..<4 {
+                let startA=Double(i)*Double.pi/2 - wedge/2
+                var rel=(ang-startA).truncatingRemainder(dividingBy:twoPi); if rel<0 { rel+=twoPi }
+                if rel<=wedge { let base=colors[seg[i]%colors.count]
+                    c=(i==curPiece && rel<=wedge*progress) ? colors[(seg[i]+1)%colors.count] : base; break }
+            }
         }
+        if let c=c { let o=((by/ss)*64+(bx/ss))*3; acc[o]+=Double(c.red); acc[o+1]+=Double(c.green); acc[o+2]+=Double(c.blue) }
     }}
-    let secAng=twoPi*Double(sec)/60 - Double.pi/2, orbit=ringMid
-    let sxp=Int((cx+orbit*cos(secAng)).rounded()), syp=Int((cy+orbit*sin(secAng)).rounded())
-    for yy in -1...1 { for xx in -1...1 { if xx*xx+yy*yy<=2 { s.set(sxp+xx,syp+yy,PixelRGB(255,255,255)) } } }
+    let inv=1.0/Double(ss*ss); var px=[PixelRGB](); px.reserveCapacity(64*64)
+    for o in stride(from:0,to:64*64*3,by:3) { px.append(PixelRGB(Int((acc[o]*inv).rounded()),Int((acc[o+1]*inv).rounded()),Int((acc[o+2]*inv).rounded()))) }
+    var s = Surface(width:64,height:64); s.pixels = px
     text5(&s, h0<12 ? "AM":"PM", 32, 29, PixelRGB(235,235,235))
     return s
 }
