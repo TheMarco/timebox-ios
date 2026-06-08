@@ -181,6 +181,16 @@ final class PixooBackend: DisplayBackend {
         if fade { for v in fadeUp { try? await setBrightness(v) } }
     }
 
+    /// Switch the device to its built-in audio visualizer — the Pixoo's own mic + local
+    /// rendering, which runs at full frame rate (far snappier than anything we can stream over
+    /// HTTP). `style` selects among the firmware's EQ visualizers. Sending any `Draw/SendHttpGif`
+    /// frame afterwards takes the device back out of this channel.
+    func showVisualizer(style: Int) async throws {
+        try? await setBrightness(100)
+        try? await post(["Command": "Channel/SetIndex", "SelectIndex": 2])   // 2 = Visualizer channel
+        try await post(["Command": "Channel/SetEqPosition", "EqPosition": max(0, style)])
+    }
+
     // MARK: - HTTP
 
     private func currentGifId() async throws -> Int {

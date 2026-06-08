@@ -25,6 +25,25 @@ final class NowPlayingEngine: ObservableObject {
         var id: String { rawValue }
     }
 
+    /// How the Pixoo displays: the app-rendered Now Playing views, or the device's own
+    /// built-in audio visualizer (snappy, full-screen, drawn by the Pixoo itself).
+    enum DisplayMode: String, CaseIterable, Identifiable {
+        case nowPlaying = "Now Playing"
+        case visualizer = "Visualizer"
+        var id: String { rawValue }
+    }
+
+    @Published var displayMode: DisplayMode = .nowPlaying {
+        didSet { persistSettings(); if running, oldValue != displayMode { syncSpectrum() } }
+    }
+    @Published var visualizerStyle = 0 {
+        didSet {
+            persistSettings()
+            if running, displayMode == .visualizer, let pixoo = connection.backend as? PixooBackend {
+                Task { try? await pixoo.showVisualizer(style: visualizerStyle) }
+            }
+        }
+    }
     @Published var showAlbumArt = true { didSet { persistSettings() } }
     @Published var clock: ClockChoice = .digital { didSet { persistSettings() } }
     @Published var dwellSeconds: Double = 12 { didSet { persistSettings() } }
@@ -56,6 +75,8 @@ final class NowPlayingEngine: ObservableObject {
     /// The active panel's geometry/timing (16×16 Timebox or 64×64 Pixoo).
     private var profile: DisplayProfile { connection.profile }
     private var renderSize: Int { profile.width }
+    /// True when connected to a Pixoo (it has a built-in visualizer); the Timebox doesn't.
+    var supportsVisualizer: Bool { profile.drivesNatively }
     /// Album art used as the digital "hero" background — only when the user is showing art.
     private var digitalArt: Surface? { showAlbumArt ? artSurface : nil }
 
@@ -93,6 +114,7 @@ final class NowPlayingEngine: ObservableObject {
     private enum Keys {
         static let artSource = "np.artSource", clock = "np.clock"
         static let showAlbumArt = "np.showAlbumArt", dwell = "np.dwell", spectrum = "np.spectrum"
+        static let displayMode = "np.displayMode", vizStyle = "np.vizStyle"
     }
 
     private func loadSettings() {
@@ -103,6 +125,8 @@ final class NowPlayingEngine: ObservableObject {
         if d.object(forKey: Keys.showAlbumArt) != nil { showAlbumArt = d.bool(forKey: Keys.showAlbumArt) }
         if d.object(forKey: Keys.dwell) != nil { dwellSeconds = d.double(forKey: Keys.dwell) }
         if d.object(forKey: Keys.spectrum) != nil { spectrumEnabled = d.bool(forKey: Keys.spectrum) }
+        if let raw = d.string(forKey: Keys.displayMode), let v = DisplayMode(rawValue: raw) { displayMode = v }
+        if d.object(forKey: Keys.vizStyle) != nil { visualizerStyle = d.integer(forKey: Keys.vizStyle) }
         isLoading = false
     }
 
@@ -114,6 +138,8 @@ final class NowPlayingEngine: ObservableObject {
         d.set(showAlbumArt, forKey: Keys.showAlbumArt)
         d.set(dwellSeconds, forKey: Keys.dwell)
         d.set(spectrumEnabled, forKey: Keys.spectrum)
+        d.set(displayMode.rawValue, forKey: Keys.displayMode)
+        d.set(visualizerStyle, forKey: Keys.vizStyle)
     }
 
     // MARK: - Art sources
@@ -140,7 +166,7 @@ final class NowPlayingEngine: ObservableObject {
     /// The spectrum runs only on the Pixoo, with the Apple Music source (the Shazam source
     /// already owns the mic). Reacts to music playing out loud in the room.
     private var spectrumActive: Bool {
-        spectrumEnabled && profile.drivesNatively && artSource == .appleMusic
+        spectrumEnabled && profile.drivesNatively && artSource == .appleMusic && displayMode == .nowPlaying
     }
 
     private func syncSpectrum() {
@@ -377,6 +403,15 @@ final class NowPlayingEngine: ObservableObject {
                 continue
             }
 
+            if displayMode == .visualizer {          // hand off to the device's own visualizer
+                try? await pixoo.showVisualizer(style: visualizerStyle)
+                status = "Visualizer"
+                while running && !Task.isCancelled && connection.isConnected && displayMode == .visualizer {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+                continue                             // back to Now Playing: the loop resumes streaming frames
+            }
+
             let items = targets()
             if items.isEmpty {                       // nothing selected: just show the clock
                 try? await pixoo.present(ClockRenderer.surface(for: Date(), size: renderSize), fade: false)
@@ -387,7 +422,7 @@ final class NowPlayingEngine: ObservableObject {
 
             var index = 0
             // Re-evaluate the (possibly changed) target list each cycle.
-            while running && !Task.isCancelled && connection.isConnected {
+            while running && !Task.isCancelled && connection.isConnected && displayMode == .nowPlaying {
                 let live = targets()
                 if live.isEmpty || restartCycle { break }
                 index %= live.count
@@ -402,7 +437,7 @@ final class NowPlayingEngine: ObservableObject {
                 let dwell = target == .digital ? max(6.0, dwellSeconds) : max(2.0, dwellSeconds)
                 let clock = ContinuousClock()
                 let deadline = clock.now.advanced(by: .seconds(dwell))
-                while running && !Task.isCancelled && connection.isConnected && !restartCycle {
+                while running && !Task.isCancelled && connection.isConnected && !restartCycle && displayMode == .nowPlaying {
                     switch target {
                     case .analog:
                         try? await pixoo.present(ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor), fade: false)

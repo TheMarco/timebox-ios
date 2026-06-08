@@ -20,39 +20,61 @@ struct NowPlayingView: View {
                 Text(engine.nowPlaying).font(.callout)
                 Text(engine.status).font(.caption).foregroundStyle(.secondary)
             }
-            Section("Album art source") {
-                Picker("Source", selection: $engine.artSource) {
-                    ForEach(NowPlayingEngine.ArtSource.allCases) { Text($0.rawValue).tag($0) }
+
+            if engine.supportsVisualizer {
+                Section("Pixoo display") {
+                    Picker("Mode", selection: $engine.displayMode) {
+                        ForEach(NowPlayingEngine.DisplayMode.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    if engine.displayMode == .visualizer {
+                        Stepper("Visualizer style \(engine.visualizerStyle)", value: $engine.visualizerStyle, in: 0...11)
+                    }
                 }
-                .pickerStyle(.segmented)
-            }
-            Section("Show on the Timebox") {
-                Toggle("Album art", isOn: $engine.showAlbumArt)
-                Picker("Clock", selection: $engine.clock) {
-                    ForEach(NowPlayingEngine.ClockChoice.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Toggle("Spectrum bars on cover", isOn: $engine.spectrumEnabled)
-            }
-            if engine.spectrumEnabled {
-                Section {
-                    Text("Live audio spectrum over the album cover (Pixoo 64 only). It uses the microphone, so it reacts to music playing out loud in the room — not through headphones.")
-                        .font(.caption).foregroundStyle(.secondary)
+                if engine.displayMode == .visualizer {
+                    Section {
+                        Text("The Pixoo's own built-in audio visualizer — snappy and full-screen, drawn by the device from its own microphone. Step through the styles to pick one. Switch back to Now Playing for album art + clocks.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
-            if engine.clock == .digital {
-                Section {
-                    Text("Digital clock shows 12-hour time on top and scrolls the full artist & title below, then fades to the cover. Its duration is automatic.")
-                        .font(.caption).foregroundStyle(.secondary)
+
+            if engine.displayMode == .nowPlaying {
+                Section("Album art source") {
+                    Picker("Source", selection: $engine.artSource) {
+                        ForEach(NowPlayingEngine.ArtSource.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Section("Show on the device") {
+                    Toggle("Album art", isOn: $engine.showAlbumArt)
+                    Picker("Clock", selection: $engine.clock) {
+                        ForEach(NowPlayingEngine.ClockChoice.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle("Spectrum bars on cover", isOn: $engine.spectrumEnabled)
+                }
+                if engine.spectrumEnabled {
+                    Section {
+                        Text("Live audio spectrum over the album cover (Pixoo 64 only). It uses the phone's microphone, so it reacts to music playing out loud in the room — not through headphones — and streams at the device's ~5 fps. For a snappy full-screen version, use Visualizer mode above.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if engine.clock == .digital {
+                    Section {
+                        Text("Digital clock shows the time with a scrolling artist & title below, then cycles to the cover. Its duration is automatic.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Section("Album cover dwell") {
+                    HStack {
+                        Text("Seconds")
+                        Slider(value: $engine.dwellSeconds, in: 3...30, step: 1)
+                        Text("\(Int(engine.dwellSeconds))s").monospacedDigit().foregroundStyle(.secondary)
+                    }
                 }
             }
-            Section("Album cover dwell") {
-                HStack {
-                    Text("Seconds")
-                    Slider(value: $engine.dwellSeconds, in: 3...30, step: 1)
-                    Text("\(Int(engine.dwellSeconds))s").monospacedDigit().foregroundStyle(.secondary)
-                }
-            }
+
             Section {
                 Button { dim() } label: {
                     Label("Dim screen (keep running, save battery)", systemImage: "moon.fill")
