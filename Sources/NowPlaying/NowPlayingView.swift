@@ -54,13 +54,6 @@ struct NowPlayingView: View {
                 }
                 Section("Show on the device") {
                     Toggle("Album art", isOn: $engine.showAlbumArt)
-                    Toggle("Spectrum bars on cover", isOn: $engine.spectrumEnabled)
-                }
-                if engine.spectrumEnabled {
-                    Section {
-                        Text("Live audio spectrum over the album cover (Pixoo 64 only). It uses the phone's microphone, so it reacts to music playing out loud in the room — not through headphones — and streams at the device's ~5 fps. For a snappy full-screen version, use Visualizer mode above.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 }
                 if engine.clock == .digital {
                     Section {

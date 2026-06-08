@@ -126,29 +126,27 @@ enum DigitalClockRenderer {
         drawLCDTime(into: &s, date: date, accent: acc, topY: 6, height: 26,
                     calendar: calendar, use24Hour: use24Hour)
 
-        // "Artist — Title" ticker in the Konami arcade font, scaled by `tickerScale` (integer
-        // pixel-doubling keeps it crisp) and bottom-aligned to fill the reserved band. It scrolls
-        // in from the right and fully off the left exactly once (the loop owns `scroll`).
+        // Small AM/PM indicator in the top-right corner (12-hour mode only).
+        if !use24Hour {
+            let isPM = calendar.component(.hour, from: date) >= 12
+            cornerLabel(into: &s, text: isPM ? "PM" : "AM", accent: acc)
+        }
+
+        // On the Pixoo the scrolling title is drawn by the device's own text engine, so this is
+        // called with an empty ticker; the bake path is kept for the renderer's generality.
         let text = ticker.trimmingCharacters(in: .whitespaces)
         if !text.isEmpty {
-            let scale = max(1, tickerScale)
             let cols = ArcadeFont.columns(for: text)
             let fh = ArcadeFont.height
-            let ty = size - fh * scale                // sit flush at the bottom of the band
+            let ty = size - fh - 4
             let tickerColor = Palette.mix(acc, PixelRGB(red: 255, green: 255, blue: 255), 0.35)
             for (i, col) in cols.enumerated() {
-                for sxi in 0..<scale {
-                    let sx = i * scale + sxi - scroll + size   // enters from the right edge
-                    if sx < 0 || sx >= size { continue }
-                    for gy in 0..<fh where col[gy] {
-                        for syi in 0..<scale {
-                            let py = ty + gy * scale + syi
-                            if py >= 0, py < size { s.set(sx, py, tickerColor) }
-                        }
-                    }
-                }
+                let sx = i - scroll + size           // enters from the right edge
+                if sx < 0 || sx >= size { continue }
+                for gy in 0..<fh where col[gy] { s.set(sx, ty + gy, tickerColor) }
             }
         }
+        _ = tickerScale
         return s
     }
 
@@ -156,9 +154,30 @@ enum DigitalClockRenderer {
     static func tickerSpan(for text: String, size: Int, tickerScale: Int) -> Int {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return 0 }
-        let scale = max(1, tickerScale)
-        if size == 16 { return PixelFont.columns(for: trimmed).count * scale + size }
-        return ArcadeFont.columns(for: trimmed).count * scale + size   // scaled arcade font
+        if size == 16 { return PixelFont.columns(for: trimmed).count * tickerScale + size }
+        return ArcadeFont.columns(for: trimmed).count + size   // 1:1 arcade font
+    }
+
+    /// Small label (e.g. "AM"/"PM") in the top-right corner on a faint dark chip so it reads
+    /// over the background. Clean 5px pixel font, accent-tinted toward white.
+    private static func cornerLabel(into s: inout Surface, text: String, accent: PixelRGB) {
+        let cols = PixelFont.columns(for: text, tracking: 1)
+        let w = cols.count, h = PixelFont.height
+        let x0 = s.width - w - 2, y0 = 2
+        let ink = Palette.mix(PixelRGB(red: 255, green: 255, blue: 255), accent, 0.25)
+        for yy in (y0 - 1)...(y0 + h) {                 // faint chip behind the glyphs
+            for xx in (x0 - 1)...(x0 + w) where xx >= 0 && xx < s.width && yy >= 0 && yy < s.height {
+                s.set(xx, yy, Palette.darken(s.at(xx, yy), 0.4))
+            }
+        }
+        for (i, col) in cols.enumerated() {
+            let x = x0 + i
+            if x < 0 || x >= s.width { continue }
+            for y in 0..<h where col[y] {
+                let py = y0 + y
+                if py >= 0, py < s.height { s.set(x, py, ink) }
+            }
+        }
     }
 
     // MARK: - 7-segment LCD time
