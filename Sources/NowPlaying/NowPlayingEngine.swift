@@ -28,6 +28,7 @@ final class NowPlayingEngine: ObservableObject {
     @Published var showAlbumArt = true { didSet { persistSettings() } }
     @Published var clock: ClockChoice = .digital { didSet { persistSettings() } }
     @Published var dwellSeconds: Double = 12 { didSet { persistSettings() } }
+    @Published var spectrumEnabled = true { didSet { persistSettings(); syncSpectrum() } }
     @Published var artSource: ArtSource = .appleMusic {
         didSet {
             persistSettings()
@@ -43,6 +44,7 @@ final class NowPlayingEngine: ObservableObject {
     private let connection: TimeboxConnection
     private let shazam = ShazamRecognizer()
     private let music = MusicNowPlayingSource()
+    private let spectrum = MicSpectrum(bandCount: 16)
     private var artSurface: Surface?
     private var accentColor: PixelRGB?   // vivid color from the current cover; tints the 64×64 clocks + title
     private var artVersion = 0   // bumps on each new cover, so the loop re-sends it
@@ -54,6 +56,8 @@ final class NowPlayingEngine: ObservableObject {
     /// The active panel's geometry/timing (16×16 Timebox or 64×64 Pixoo).
     private var profile: DisplayProfile { connection.profile }
     private var renderSize: Int { profile.width }
+    /// Album art used as the digital "hero" background — only when the user is showing art.
+    private var digitalArt: Surface? { showAlbumArt ? artSurface : nil }
 
     init(connection: TimeboxConnection) {
         self.connection = connection
@@ -69,6 +73,7 @@ final class NowPlayingEngine: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = true
         wireSources()
         startSource()
+        syncSpectrum()
         // The Pixoo is driven by its own engine (static frames + native scrolling text +
         // brightness fades); the Timebox streams every frame over BLE.
         loop = Task { profile.drivesNatively ? await runNativeLoop() : await runLoop() }
@@ -80,13 +85,14 @@ final class NowPlayingEngine: ObservableObject {
         loop?.cancel(); loop = nil
         music.stop()
         shazam.stop()
+        spectrum.stop()
     }
 
     // MARK: - Settings persistence (restored on next launch)
 
     private enum Keys {
         static let artSource = "np.artSource", clock = "np.clock"
-        static let showAlbumArt = "np.showAlbumArt", dwell = "np.dwell"
+        static let showAlbumArt = "np.showAlbumArt", dwell = "np.dwell", spectrum = "np.spectrum"
     }
 
     private func loadSettings() {
@@ -96,6 +102,7 @@ final class NowPlayingEngine: ObservableObject {
         if let raw = d.string(forKey: Keys.clock), let v = ClockChoice(rawValue: raw) { clock = v }
         if d.object(forKey: Keys.showAlbumArt) != nil { showAlbumArt = d.bool(forKey: Keys.showAlbumArt) }
         if d.object(forKey: Keys.dwell) != nil { dwellSeconds = d.double(forKey: Keys.dwell) }
+        if d.object(forKey: Keys.spectrum) != nil { spectrumEnabled = d.bool(forKey: Keys.spectrum) }
         isLoading = false
     }
 
@@ -106,6 +113,7 @@ final class NowPlayingEngine: ObservableObject {
         d.set(clock.rawValue, forKey: Keys.clock)
         d.set(showAlbumArt, forKey: Keys.showAlbumArt)
         d.set(dwellSeconds, forKey: Keys.dwell)
+        d.set(spectrumEnabled, forKey: Keys.spectrum)
     }
 
     // MARK: - Art sources
@@ -124,6 +132,19 @@ final class NowPlayingEngine: ObservableObject {
         nowPlaying = "—"
         songKey = ""
         startSource()
+        syncSpectrum()
+    }
+
+    // MARK: - Spectrum (mic FFT → bars over the cover, Pixoo only)
+
+    /// The spectrum runs only on the Pixoo, with the Apple Music source (the Shazam source
+    /// already owns the mic). Reacts to music playing out loud in the room.
+    private var spectrumActive: Bool {
+        spectrumEnabled && profile.drivesNatively && artSource == .appleMusic
+    }
+
+    private func syncSpectrum() {
+        if running && spectrumActive { spectrum.start() } else { spectrum.stop() }
     }
 
     private func setSong(title: String?, artist: String?) {
@@ -193,7 +214,7 @@ final class NowPlayingEngine: ObservableObject {
         case .analog: return ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor)
         case .digital: return DigitalClockRenderer.surface(
             for: Date(), ticker: tickerText(), scroll: scroll,
-            size: renderSize, tickerScale: profile.tickerScale, accent: accentColor)
+            size: renderSize, tickerScale: profile.tickerScale, accent: accentColor, art: digitalArt)
         }
     }
 
@@ -333,10 +354,11 @@ final class NowPlayingEngine: ObservableObject {
         case .analog:
             try? await pixoo.present(ClockRenderer.surface(for: Date(), size: renderSize, accent: accentColor), fade: fade)
         case .digital:
-            // Time-only background; the scrolling title is drawn by the device's text engine.
+            // Hero background (art or synthwave) + time; the scrolling title is drawn by the
+            // device's own text engine over the darkened bottom band.
             let bg = DigitalClockRenderer.surface(for: Date(), ticker: "", scroll: 0,
                                                   size: renderSize, tickerScale: profile.tickerScale,
-                                                  accent: accentColor)
+                                                  accent: accentColor, art: digitalArt)
             try? await pixoo.present(bg, fade: fade, text: pixooTitle())
         }
     }
@@ -389,17 +411,26 @@ final class NowPlayingEngine: ObservableObject {
                             lastMinute = clockMinute()
                             let bg = DigitalClockRenderer.surface(for: Date(), ticker: "", scroll: 0,
                                                                   size: renderSize, tickerScale: profile.tickerScale,
-                                                                  accent: accentColor)
+                                                                  accent: accentColor, art: digitalArt)
                             try? await pixoo.present(bg, fade: false, text: pixooTitle())
                         }
                     case .albumArt:
-                        if artVersion != lastArtVersion {
+                        if spectrumActive, let art = artSurface {
+                            // Live spectrum bars over the cover — stream as fast as HTTP allows.
+                            let frame = SpectrumRenderer.overlay(on: art, bands: spectrum.bands, accent: accentColor)
+                            try? await pixoo.present(frame, fade: false)
+                            lastArtVersion = artVersion
+                        } else if artVersion != lastArtVersion {
                             lastArtVersion = artVersion
                             if let art = artSurface { try? await pixoo.present(art, fade: false) }
                         }
                     }
                     if multi && clock.now >= deadline { break }
-                    try? await Task.sleep(nanoseconds: target == .analog ? 1_000_000_000 : 300_000_000)
+                    let sleepNs: UInt64
+                    if target == .analog { sleepNs = 1_000_000_000 }
+                    else if target == .albumArt && spectrumActive { sleepNs = 40_000_000 }
+                    else { sleepNs = 300_000_000 }
+                    try? await Task.sleep(nanoseconds: sleepNs)
                 }
 
                 if multi { index += 1 } else if restartCycle { break }

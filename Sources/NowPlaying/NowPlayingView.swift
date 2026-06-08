@@ -32,6 +32,13 @@ struct NowPlayingView: View {
                     ForEach(NowPlayingEngine.ClockChoice.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                Toggle("Spectrum bars on cover", isOn: $engine.spectrumEnabled)
+            }
+            if engine.spectrumEnabled {
+                Section {
+                    Text("Live audio spectrum over the album cover (Pixoo 64 only). It uses the microphone, so it reacts to music playing out loud in the room — not through headphones.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             if engine.clock == .digital {
                 Section {
