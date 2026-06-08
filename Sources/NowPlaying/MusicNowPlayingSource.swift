@@ -46,6 +46,14 @@ final class MusicNowPlayingSource {
         player.endGeneratingPlaybackNotifications()
     }
 
+    /// Current playback position as 0…1 (or nil if unknown). Reads the system player live.
+    var progress: Double? {
+        guard let dur = player.nowPlayingItem?.playbackDuration, dur > 0 else { return nil }
+        let t = player.currentPlaybackTime
+        guard t.isFinite, t >= 0 else { return nil }
+        return min(1, t / dur)
+    }
+
     private func update() {
         guard let item = player.nowPlayingItem else {
             onStatus?("Nothing playing in Apple Music")

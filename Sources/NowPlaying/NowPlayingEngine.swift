@@ -215,6 +215,9 @@ final class NowPlayingEngine: ObservableObject {
 
     private func tickerText() -> String { nowPlaying == "—" ? "" : nowPlaying }
 
+    /// Song progress 0…1 for the bottom bar (Apple Music only; Shazam has no position).
+    private func playbackProgress() -> Double? { artSource == .appleMusic ? music.progress : nil }
+
     private func render(_ target: Target, scroll: Int) -> Surface {
         switch target {
         case .albumArt: return artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize)
@@ -408,7 +411,7 @@ final class NowPlayingEngine: ObservableObject {
         func frame() -> Surface {
             DigitalClockRenderer.surface(for: Date(), ticker: title, scroll: scroll,
                                          size: renderSize, tickerScale: profile.tickerScale,
-                                         accent: accentColor, art: digitalArt)
+                                         accent: accentColor, art: digitalArt, progress: playbackProgress())
         }
         try? await pixoo.present(frame(), fade: true)   // enter: band blank, title off the right edge
 
@@ -449,19 +452,29 @@ final class NowPlayingEngine: ObservableObject {
         }
     }
 
-    /// Album cover: fade in, then hold for the dwell (re-sending only when a new cover arrives).
+    /// Album cover: fade in, then refresh periodically so the song-progress bar advances
+    /// (and a new cover is picked up) over the dwell.
     private func presentCover(on pixoo: PixooBackend, multi: Bool) async {
-        try? await pixoo.present(artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize), fade: true)
+        func coverFrame() -> Surface {
+            var f = artSurface ?? ClockRenderer.surface(for: Date(), size: renderSize)
+            if let p = playbackProgress() {
+                DigitalClockRenderer.progressBar(into: &f, progress: p,
+                    accent: Palette.vivid(accentColor ?? PixelRGB(red: 90, green: 180, blue: 255)))
+            }
+            return f
+        }
+        try? await pixoo.present(coverFrame(), fade: true)
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(max(2.0, dwellSeconds)))
         var lastArtVersion = artVersion
         while nativeLoopAlive {
-            if artVersion != lastArtVersion {
+            // Re-send to advance the progress bar, or when a new cover arrives.
+            if playbackProgress() != nil || artVersion != lastArtVersion {
                 lastArtVersion = artVersion
-                if let art = artSurface { try? await pixoo.present(art, fade: false) }
+                try? await pixoo.present(coverFrame(), fade: false)
             }
             if multi && clock.now >= deadline { break }
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
     }
 }

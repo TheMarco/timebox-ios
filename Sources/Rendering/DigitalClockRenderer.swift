@@ -15,11 +15,23 @@ import TimeboxKit
 enum DigitalClockRenderer {
     static func surface(for date: Date, ticker: String = "", scroll: Int = 0, size: Int,
                         tickerScale: Int = 1, accent: PixelRGB? = nil, art: Surface? = nil,
-                        calendar: Calendar = .current, use24Hour: Bool = false) -> Surface {
+                        calendar: Calendar = .current, use24Hour: Bool = false,
+                        progress: Double? = nil) -> Surface {
         size == 16
             ? small(for: date, ticker: ticker, scroll: scroll, calendar: calendar, use24Hour: use24Hour)
             : large(for: date, ticker: ticker, scroll: scroll, size: size, tickerScale: tickerScale,
-                    accent: accent, art: art, calendar: calendar, use24Hour: use24Hour)
+                    accent: accent, art: art, calendar: calendar, use24Hour: use24Hour, progress: progress)
+    }
+
+    /// A 2px song-progress bar across the very bottom: the elapsed portion in `accent`, the
+    /// rest a dim track. `progress` is 0…1. Shared by the digital view and the album cover.
+    static func progressBar(into s: inout Surface, progress: Double, accent: PixelRGB) {
+        let p = max(0, min(1, progress))
+        let fillW = Int((Double(s.width) * p).rounded())
+        let track = Palette.darken(accent, 0.22)
+        for y in (s.height - 2)..<s.height {
+            for x in 0..<s.width { s.set(x, y, x < fillW ? accent : track) }
+        }
     }
 
     // MARK: - Time tokens (shared)
@@ -112,7 +124,7 @@ enum DigitalClockRenderer {
 
     private static func large(for date: Date, ticker: String, scroll: Int, size: Int,
                               tickerScale: Int, accent: PixelRGB?, art: Surface?,
-                              calendar: Calendar, use24Hour: Bool) -> Surface {
+                              calendar: Calendar, use24Hour: Bool, progress: Double? = nil) -> Surface {
         var s = Surface(width: size, height: size)
         let acc = Palette.vivid(accent ?? PixelRGB(red: 90, green: 180, blue: 255))
         let titleBand = 16   // bottom rows reserved for the native scrolling title
@@ -155,6 +167,8 @@ enum DigitalClockRenderer {
                 }
             }
         }
+
+        if let progress { progressBar(into: &s, progress: progress, accent: acc) }
         return s
     }
 
