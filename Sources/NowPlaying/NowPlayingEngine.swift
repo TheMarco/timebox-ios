@@ -45,7 +45,16 @@ final class NowPlayingEngine: ObservableObject {
         }
     }
     @Published var showAlbumArt = true { didSet { persistSettings() } }
+    /// Lo-fi pixel-art preset for the cover (`"Off"` or a `PixelArt` style id). Optional; the
+    /// smooth enhanced cover is kept as `baseArt` so presets can be switched live.
+    @Published var pixelStyleID = NowPlayingEngine.pixelArtOff {
+        didSet { persistSettings(); if oldValue != pixelStyleID { applyArtStyle() } }
+    }
     @Published var clock: ClockChoice = .digital { didSet { persistSettings() } }
+
+    /// The "no treatment" sentinel, plus the full picker list (Off + every preset).
+    static let pixelArtOff = "Off"
+    var pixelStyleOptions: [String] { [Self.pixelArtOff] + PixelArt.presets.map(\.id) }
     @Published var dwellSeconds: Double = 12 { didSet { persistSettings() } }
     @Published var artSource: ArtSource = .appleMusic {
         didSet {
@@ -62,19 +71,34 @@ final class NowPlayingEngine: ObservableObject {
     private let connection: TimeboxConnection
     private let shazam = ShazamRecognizer()
     private let music = MusicNowPlayingSource()
-    private var artSurface: Surface?
+    private var baseArt: Surface?        // the smooth enhanced cover, before the optional pixel-art pass
+    private var artSurface: Surface?     // what's actually shown (baseArt, possibly stylized)
     private var accentColor: PixelRGB?   // vivid color from the current cover; tints the 64×64 clocks + title
     private var artVersion = 0   // bumps on each new cover, so the loop re-sends it
     private var restartCycle = false  // new song: jump back to the cover before scrolling
     private var songKey = ""          // current track identity, to ignore repeat notifications
     private var isLoading = false     // suppresses persistence while restoring saved settings
     private var loop: Task<Void, Never>?
+    private var previewLoop: Task<Void, Never>?
+
+    /// A live render of what the panel is showing (cover ⇄ clock ⇄ title, with the active pixel-art
+    /// mode applied), for the in-app `PixooFrame`. Held in its *own* observable rather than on the
+    /// engine so the ~8 fps frame updates redraw only the preview view — not the whole settings
+    /// form, whose constant invalidation was making the mode picker drop taps. Driven independently
+    /// of the device link, so the preview works with Apple Music playing and nothing connected.
+    let preview = PanelPreview()
 
     /// The active panel's geometry/timing (16×16 Timebox or 64×64 Pixoo).
     private var profile: DisplayProfile { connection.profile }
     private var renderSize: Int { profile.width }
-    /// True when connected to a Pixoo (it has a built-in visualizer); the Timebox doesn't.
-    var supportsVisualizer: Bool { profile.drivesNatively }
+    /// The device's built-in audio visualizer is a Pixoo-only, on-device feature — only offer it
+    /// when actually connected (there's nothing to preview in-app without the hardware).
+    var supportsVisualizer: Bool { connection.isConnected && profile.drivesNatively }
+
+    /// True only while the panel is handed off to the device's own visualizer; in that one mode
+    /// the app shows no preview (the Pixoo draws itself from its mic). Otherwise — including
+    /// whenever no device is connected — we render the Now Playing preview.
+    var showingDeviceVisualizer: Bool { supportsVisualizer && displayMode == .visualizer }
     /// Album art used as the digital "hero" background — only when the user is showing art.
     private var digitalArt: Surface? { showAlbumArt ? artSurface : nil }
 
@@ -95,12 +119,15 @@ final class NowPlayingEngine: ObservableObject {
         // The Pixoo is driven by its own engine (static frames + native scrolling text +
         // brightness fades); the Timebox streams every frame over BLE.
         loop = Task { profile.drivesNatively ? await runNativeLoop() : await runLoop() }
+        previewLoop = Task { await runPreviewLoop() }
     }
 
     func stop() {
         running = false
         UIApplication.shared.isIdleTimerDisabled = false
         loop?.cancel(); loop = nil
+        previewLoop?.cancel(); previewLoop = nil
+        preview.surface = nil
         music.stop()
         shazam.stop()
     }
@@ -111,6 +138,7 @@ final class NowPlayingEngine: ObservableObject {
         static let artSource = "np.artSource", clock = "np.clock"
         static let showAlbumArt = "np.showAlbumArt", dwell = "np.dwell"
         static let displayMode = "np.displayMode", vizStyle = "np.vizStyle"
+        static let pixelStyle = "np.pixelStyle"
     }
 
     private func loadSettings() {
@@ -119,6 +147,8 @@ final class NowPlayingEngine: ObservableObject {
         if let raw = d.string(forKey: Keys.artSource), let v = ArtSource(rawValue: raw) { artSource = v }
         if let raw = d.string(forKey: Keys.clock), let v = ClockChoice(rawValue: raw) { clock = v }
         if d.object(forKey: Keys.showAlbumArt) != nil { showAlbumArt = d.bool(forKey: Keys.showAlbumArt) }
+        if let raw = d.string(forKey: Keys.pixelStyle),
+           raw == Self.pixelArtOff || PixelArt.preset(named: raw) != nil { pixelStyleID = raw }
         if d.object(forKey: Keys.dwell) != nil { dwellSeconds = d.double(forKey: Keys.dwell) }
         if let raw = d.string(forKey: Keys.displayMode), let v = DisplayMode(rawValue: raw) { displayMode = v }
         if d.object(forKey: Keys.vizStyle) != nil { visualizerStyle = d.integer(forKey: Keys.vizStyle) }
@@ -131,6 +161,7 @@ final class NowPlayingEngine: ObservableObject {
         d.set(artSource.rawValue, forKey: Keys.artSource)
         d.set(clock.rawValue, forKey: Keys.clock)
         d.set(showAlbumArt, forKey: Keys.showAlbumArt)
+        d.set(pixelStyleID, forKey: Keys.pixelStyle)
         d.set(dwellSeconds, forKey: Keys.dwell)
         d.set(displayMode.rawValue, forKey: Keys.displayMode)
         d.set(visualizerStyle, forKey: Keys.vizStyle)
@@ -147,6 +178,7 @@ final class NowPlayingEngine: ObservableObject {
 
     private func restartSource() {
         music.stop(); shazam.stop()
+        baseArt = nil
         artSurface = nil
         accentColor = nil
         nowPlaying = "—"
@@ -194,10 +226,19 @@ final class NowPlayingEngine: ObservableObject {
 
     /// Store the latest cover; the render loop re-sends it on the next tick (artVersion bump).
     private func setArt(_ surface: Surface) {
-        artSurface = surface
-        accentColor = Palette.accent(from: surface)   // derive a tint for the clocks + title
-        artVersion += 1
-        restartCycle = true     // new cover → show it first, then scroll the title
+        baseArt = surface
+        applyArtStyle(restart: true)   // new cover → show it first, then scroll the title
+    }
+
+    /// (Re)derive the shown cover from `baseArt`, applying the pixel-art pass when enabled, and
+    /// refresh the accent tint. Called on a new cover and whenever the `pixelArt` toggle flips.
+    private func applyArtStyle(restart: Bool = false) {
+        guard let base = baseArt else { return }
+        let styled = PixelArt.preset(named: pixelStyleID).map { PixelArt.stylize(base, style: $0) } ?? base
+        artSurface = styled
+        accentColor = Palette.accent(from: styled)   // derive a tint for the clocks + title
+        artVersion += 1                               // loops re-send the cover on the next tick
+        if restart { restartCycle = true }
     }
 
     // MARK: - Render targets
@@ -337,6 +378,72 @@ final class NowPlayingEngine: ObservableObject {
             // Transient drop — the transport auto-reconnects and the loop pauses (via the
             // isConnected check) until it's back. Keep the module running.
             lastFrame = nil
+        }
+    }
+
+    // MARK: - In-app preview loop
+
+    /// Drives `previewSurface` with the same cover ⇄ clock cycle the device shows, rendered fully
+    /// in-Surface (including the scrolling title) so the app's `PixooFrame` is a faithful, always-on
+    /// picture of the panel — decoupled from the hardware. Active only in Now Playing mode.
+    private func runPreviewLoop() async {
+        let clock = ContinuousClock()
+        var index = 0, scroll = 0, elapsed = 0.0
+        var lastSong = ""
+        while running && !Task.isCancelled {
+            guard !showingDeviceVisualizer else {           // visualizer: the device draws itself
+                preview.surface = nil
+                try? await clock.sleep(for: .seconds(0.3)); continue
+            }
+            let items = targets()
+            guard !items.isEmpty else {                    // nothing selected: just the clock
+                let size = renderSize
+                preview.surface = await Task.detached { ClockRenderer.surface(for: Date(), size: size) }.value
+                try? await clock.sleep(for: .seconds(0.5)); continue
+            }
+            if songKey != lastSong { lastSong = songKey; index = 0; scroll = 0; elapsed = 0 }  // new song → cover first
+            index %= items.count
+            let target = items[index]
+            preview.surface = await previewFrame(target, scroll: scroll)
+
+            try? await clock.sleep(for: .seconds(0.12))
+            elapsed += 0.12
+            if target == .digital { scroll += profile.scrollStep }
+
+            let done: Bool
+            switch target {
+            case .digital:
+                let text = tickerText()
+                done = !text.isEmpty && scroll >= tickerSpan(text)
+            case .albumArt, .analog:
+                done = elapsed >= max(2.0, dwellSeconds)
+            }
+            if done {
+                elapsed = 0; scroll = 0
+                if items.count > 1 { index = (index + 1) % items.count }
+            }
+        }
+    }
+
+    /// Render one preview frame off the main thread (mirrors the Pixoo presenters).
+    private func previewFrame(_ target: Target, scroll: Int) async -> Surface {
+        let size = renderSize, scale = profile.tickerScale
+        let acc = accentColor, art = digitalArt, cover = artSurface
+        let title = tickerText(), prog = playbackProgress()
+        switch target {
+        case .albumArt:
+            return await Task.detached {
+                var f = cover ?? ClockRenderer.surface(for: Date(), size: size)
+                if let p = prog { DigitalClockRenderer.progressReveal(into: &f, progress: p) }
+                return f
+            }.value
+        case .analog:
+            return await Task.detached { ClockRenderer.surface(for: Date(), size: size, accent: acc, art: art) }.value
+        case .digital:
+            return await Task.detached {
+                DigitalClockRenderer.surface(for: Date(), ticker: title, scroll: scroll, size: size,
+                                             tickerScale: scale, accent: acc, art: art, progress: prog)
+            }.value
         }
     }
 
@@ -518,4 +625,12 @@ final class NowPlayingEngine: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
     }
+}
+
+/// Holds just the live preview frame, separate from `NowPlayingEngine` so its high-frequency
+/// updates redraw only the preview view — keeping the surrounding settings form (and its mode
+/// picker) responsive.
+@MainActor
+final class PanelPreview: ObservableObject {
+    @Published var surface: Surface?
 }

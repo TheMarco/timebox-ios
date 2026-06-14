@@ -5,7 +5,7 @@ struct NowPlayingView: View {
     @StateObject private var engine: NowPlayingEngine
     @Environment(\.scenePhase) private var scenePhase
 
-    // "Dim screen" keeps the app awake and the Timebox running, but drops the phone screen
+    // "Dim screen" keeps the app awake and the Pixoo running, but drops the phone screen
     // to black + minimum backlight to save battery (true black = pixels off on OLED).
     @State private var dimmed = false
     @State private var savedBrightness = UIScreen.main.brightness
@@ -39,12 +39,26 @@ struct NowPlayingView: View {
                 }
             }
 
-            if engine.displayMode == .nowPlaying {
+            if !engine.showingDeviceVisualizer {
+                Section("Preview") {
+                    PanelPreviewView(preview: engine.preview)
+                        .frame(maxWidth: 280)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 4)
+                        .listRowBackground(Color.clear)
+                    Text("A live render of the panel — album art, clock and the pixel-art mode you pick below. Updates as Apple Music plays, with or without a device connected.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Album art source") {
                     Picker("Source", selection: $engine.artSource) {
                         ForEach(NowPlayingEngine.ArtSource.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    Picker("Lo-fi pixel art", selection: $engine.pixelStyleID) {
+                        ForEach(engine.pixelStyleOptions, id: \.self) { Text($0).tag($0) }
+                    }
+                    Text("Re-paints the cover in a limited palette with ordered dithering — a deliberately retro, full-resolution look. Soft/Classic/Crunchy keep the album's own colours; the console palettes (Game Boy, PICO-8, NES, …) and CRT ramps (Sepia, Green CRT, Thermal, …) impose their own. Off shows the smooth cover.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Clock") {
                     Picker("Style", selection: $engine.clock) {
@@ -74,7 +88,7 @@ struct NowPlayingView: View {
                 Button { dim() } label: {
                     Label("Dim screen (keep running, save battery)", systemImage: "moon.fill")
                 }
-                Text("Blacks out the phone screen while the Timebox keeps going. Tap the screen to wake. Leaving this screen restores brightness.")
+                Text("Blacks out the phone screen while the Pixoo keeps going. Tap the screen to wake. Leaving this screen restores brightness.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -113,5 +127,23 @@ struct NowPlayingView: View {
 
     private func restoreBrightness() {
         UIScreen.main.brightness = savedBrightness
+    }
+}
+
+/// The live panel preview, isolated in its own view so its ~8 fps frame updates redraw only here —
+/// not the settings form around it (which was making the mode picker drop taps).
+private struct PanelPreviewView: View {
+    @ObservedObject var preview: PanelPreview
+
+    var body: some View {
+        PixooFrame {
+            Group {
+                if let s = preview.surface {
+                    surfaceImage(s).resizable().interpolation(.none)
+                } else {
+                    Color.black
+                }
+            }
+        }
     }
 }

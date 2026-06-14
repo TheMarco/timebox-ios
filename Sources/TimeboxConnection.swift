@@ -11,8 +11,8 @@ final class TimeboxConnection: ObservableObject {
     @Published var isConnected = false
     @Published var busy = false
     /// Geometry/timing of the connected device, so modules size their renders. Defaults to
-    /// the Timebox until a backend connects.
-    @Published private(set) var profile = DisplayProfile.timebox
+    /// the Pixoo until a backend connects (Timebox Evo is disabled for now).
+    @Published private(set) var profile = DisplayProfile.pixoo
 
     /// The active backend. Exposed so a module can drive a device's native engine (the Pixoo's
     /// smooth scrolling-text / fade path). Nil when disconnected.
@@ -100,13 +100,10 @@ final class TimeboxConnection: ObservableObject {
     /// (and the user didn't explicitly disconnect).
     func autoConnect() {
         guard !isConnected, !busy, UserDefaults.standard.bool(forKey: Keys.autoConnect) else { return }
-        switch restoredKind {
-        case .pixoo:
-            let host = UserDefaults.standard.string(forKey: Keys.pixooHost) ?? ""
-            if host.isEmpty { connectTimebox() } else { connectPixoo(host: host) }
-        case .timebox:
-            connectTimebox()
-        }
+        // Pixoo-only for now (Timebox Evo disabled): only restore a Pixoo we have an IP for.
+        let host = UserDefaults.standard.string(forKey: Keys.pixooHost) ?? ""
+        guard !host.isEmpty else { return }
+        connectPixoo(host: host)
     }
 
     private func persistRestore(_ kind: BackendKind) {

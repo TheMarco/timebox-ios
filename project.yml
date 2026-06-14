@@ -21,15 +21,26 @@ targets:
       properties:
         CFBundleDisplayName: Pixel Labs
         UILaunchScreen: {}
-        UIBackgroundModes: [bluetooth-central]
-        NSBluetoothAlwaysUsageDescription: "Connects to your Timebox over Bluetooth to send images and colors."
+        # Timebox Evo (Bluetooth) is disabled for now — Pixoo 64 only. The Bluetooth usage
+        # string + bluetooth-central background mode were removed with it; re-add them here
+        # if the Timebox device is brought back.
         NSMicrophoneUsageDescription: "Listens to nearby music so Shazam can identify it and show the album art on your display."
         NSAppleMusicUsageDescription: "Reads what's playing in your Music app to show the album art on your display."
         NSLocalNetworkUsageDescription: "Finds and sends now-playing artwork and a clock to your Divoom Pixoo 64 over Wi-Fi."
+        NSLocationWhenInUseUsageDescription: "Uses your location to show local weather on your display."
         # The Pixoo's HTTP API is plain http on the local network; allow it (private/loopback
         # addresses only) while keeping App Transport Security on for everything else.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+    # Entitlements are generated here so they're actually wired into the build (CODE_SIGN_ENTITLEMENTS).
+    # WeatherKit is a real profile entitlement and powers the Weather module. ShazamKit is deliberately
+    # NOT listed: it's an App Service (enabled on the App ID at developer.apple.com), not a provisioning
+    # entitlement — adding com.apple.developer.shazamkit here breaks signing ("not a valid entitlement").
+    # Shazam recognition is authorized server-side by the App ID's ShazamKit service.
+    entitlements:
+      path: TimeboxiOS.entitlements
+      properties:
+        com.apple.developer.weatherkit: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.themarco.timebox-ios

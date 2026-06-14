@@ -377,7 +377,7 @@ struct ClockFacesView: View {
             VStack(spacing: 16) {
                 PixooFrame {
                     TimelineView(.periodic(from: Date(), by: 0.25)) { ctx in
-                        faceImage(driver.face.render(size: 64, date: ctx.date))
+                        surfaceImage(driver.face.render(size: 64, date: ctx.date))
                             .resizable().interpolation(.none)
                     }
                 }
@@ -391,7 +391,7 @@ struct ClockFacesView: View {
                     ForEach(ClockFace.allCases) { f in
                         Button { driver.face = f } label: {
                             VStack(spacing: 4) {
-                                faceImage(f.render(size: 64, date: sample))
+                                surfaceImage(f.render(size: 64, date: sample))
                                     .resizable().interpolation(.none).aspectRatio(1, contentMode: .fit)
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                                 Text(f.name).font(.caption2)
@@ -416,7 +416,9 @@ struct ClockFacesView: View {
 
 // MARK: - Surface → SwiftUI Image
 
-private func faceImage(_ s: Surface) -> Image {
+/// Render a `Surface` as a 1:1 SwiftUI `Image` (decorative). Shared by the Clock, Weather and
+/// Now Playing previews; pair with `.interpolation(.none)` to keep the pixels crisp.
+func surfaceImage(_ s: Surface) -> Image {
     let w = s.width, h = s.height
     var bytes = [UInt8](repeating: 255, count: w * h * 4)
     for i in 0..<s.pixels.count { let p = s.pixels[i]; bytes[i*4]=p.red; bytes[i*4+1]=p.green; bytes[i*4+2]=p.blue; bytes[i*4+3]=255 }

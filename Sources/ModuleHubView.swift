@@ -38,57 +38,46 @@ struct ModuleHubView: View {
                         Button("Disconnect") { connection.disconnect() }
                             .foregroundStyle(.red)
                     } else {
-                        Picker("Device", selection: $deviceKindRaw) {
-                            Text("Pixoo 64").tag(DeviceKind.pixoo.rawValue)
-                            Text("Timebox Evo").tag(DeviceKind.timebox.rawValue)
-                        }
-                        .pickerStyle(.menu)
-
-                        if deviceKind == .pixoo {
-                            Button("Find Pixoo 64 on Wi-Fi") { connection.connectPixooAuto() }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(connection.busy)
-                            Button("Enter Pixoo 64 IP…") {
-                                pixooIP = connection.lastPixooHost
-                                showPixooIPPrompt = true
-                            }
+                        // Timebox Evo is disabled for now — Pixoo 64 only. (The device picker and
+                        // Bluetooth connect path are intentionally left in the codebase, just unused.)
+                        Button("Find Pixoo 64 on Wi-Fi") { connection.connectPixooAuto() }
+                            .buttonStyle(.borderedProminent)
                             .disabled(connection.busy)
-                        } else {
-                            Button("Connect Timebox (Bluetooth)") { connection.connectTimebox() }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(connection.busy)
+                        Button("Enter Pixoo 64 IP…") {
+                            pixooIP = connection.lastPixooHost
+                            showPixooIPPrompt = true
                         }
+                        .disabled(connection.busy)
                     }
                 }
 
+                // Every module renders a live on-screen preview, so they all work without a
+                // device connected — connecting just mirrors the same render onto the Pixoo.
                 Section("Modules") {
                     NavigationLink(value: HubModule.nowPlaying) {
                         Label("Now Playing", systemImage: "music.note")
                     }
-                    .disabled(!connection.isConnected)
 
                     if showsRichModules {
                         NavigationLink(value: HubModule.clock) {
                             Label("Clock", systemImage: "clock")
                         }
-                        .disabled(!connection.isConnected)
 
                         NavigationLink(value: HubModule.weather) {
                             Label("Weather", systemImage: "cloud.sun")
                         }
-                        .disabled(!connection.isConnected)
                     }
                 }
 
                 if !connection.isConnected {
                     Section {
-                        Text("Connect to a Divoom Timebox Evo (Bluetooth) or a Pixoo 64 (Wi-Fi) to open a module.")
+                        Text("Open any module to preview it on screen. Connect a Pixoo 64 (Wi-Fi) to mirror it onto the device too.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
                 Section {
-                    Text("Unofficial app — not affiliated with, authorized, or endorsed by Divoom. \u{201C}Divoom\u{201D}, \u{201C}Timebox\u{201D} and \u{201C}Pixoo\u{201D} are trademarks of their respective owners.")
+                    Text("Unofficial app — not affiliated with, authorized, or endorsed by Divoom. \u{201C}Divoom\u{201D} and \u{201C}Pixoo\u{201D} are trademarks of their respective owners.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
