@@ -81,7 +81,7 @@ struct ModuleHubView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Pixel Labs")
+            .navigationTitle("PixelFlow")
             .navigationDestination(for: HubModule.self) { module in
                 switch module {
                 case .nowPlaying: NowPlayingView(connection: connection)

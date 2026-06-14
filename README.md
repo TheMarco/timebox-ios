@@ -1,4 +1,4 @@
-# Pixel Labs
+# PixelFlow
 
 An iOS app that drives a Divoom LED display — a **Timebox Evo** (16×16) over Bluetooth or a
 **Pixoo 64** (64×64) over Wi-Fi — with a Now Playing module (album art + analog/digital
@@ -12,7 +12,7 @@ adapts it per device: `TimeboxBackend` streams 16×16 `PixelFrame`s over BLE, wh
 (static frames + native scrolling text + brightness fades), since its HTTP round-trips can't
 sustain smooth frame streaming. This mirrors the macOS *Timebox Now Playing* app.
 
-> **Unofficial.** Pixel Labs is not affiliated with, authorized, or endorsed by Divoom.
+> **Unofficial.** PixelFlow is not affiliated with, authorized, or endorsed by Divoom.
 > "Divoom", "Timebox" and "Pixoo" are trademarks of their respective owners; they're used
 > here only to describe the compatible hardware. The protocols were clean-room reimplemented
 > for interoperability — no Divoom code or assets are included.

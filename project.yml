@@ -10,7 +10,7 @@ targets:
   TimeboxiOS:
     type: application
     platform: iOS
-    sources: [Sources, Fonts]
+    sources: [Sources, Fonts, Assets.xcassets]
     dependencies:
       - package: TimeboxStudio
         product: TimeboxKit
@@ -19,7 +19,7 @@ targets:
     info:
       path: TimeboxiOS-Info.plist
       properties:
-        CFBundleDisplayName: Pixel Labs
+        CFBundleDisplayName: PixelFlow
         UILaunchScreen: {}
         # Timebox Evo (Bluetooth) is disabled for now — Pixoo 64 only. The Bluetooth usage
         # string + bluetooth-central background mode were removed with it; re-add them here
@@ -44,6 +44,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.themarco.timebox-ios
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: "3ML6V62AF5"
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1"
